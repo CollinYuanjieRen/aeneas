@@ -26,8 +26,9 @@ namespace Aeneas.Std
 Every executable definition below models a Rust function (see its `rust_fun` pattern), with the
 signature Aeneas gives that function: `Box<T>` is `T`, and a `&mut T` argument is returned updated
 next to the result. The exceptions are the heap primitives behind them (`RawPtr.allocate`,
-`RawPtr.materialize`, `RawPtr.take`, `RawPtr.revive`, their range versions, `Result.require`) and
-`RawPtr.cast_scalar`, the `as` cast between raw pointers, which always fails.
+`RawPtr.materialize`, `RawPtr.take`, `RawPtr.revive`, their range versions, `RawPtr.null`,
+`RawPtr.LiveBox`, `Result.require`), `RawPtr.eq` and `RawPtr.ne`, which model `==` and `!=` on raw
+pointers, and `RawPtr.cast_scalar`, the `as` cast between raw pointers, which always fails.
 
 The heap is typed: a pointer `*mut T` reads and writes cells of type `Pointee.Cell T`, which is
 `T` itself except for `MaybeUninit<U>`, whose cells are the (possibly uninitialized) cells of `U`.
@@ -265,6 +266,73 @@ ends (`statefulLifetimes`). -/
 @[rust_fun "core::ptr::from_mut" (statefulLifetimes := [0])]
 def core.ptr.from_mut {T : Type} [Pointee T] (r : T) : Result (MutRawPtr T × Result T) :=
   Aeneas.Std.bind (RawPtr.materialize [r]) fun p => .ok (p, core.ptr.end_from_mut p)
+
+/-- `&mut *p`: the value is moved out of its slot, which is killed so that the other accesses to
+it fail while the borrow is live, and the slot is brought back to life, holding the final value
+of the borrow, when the borrow ends (`statefulLifetimes`). The extraction translates the borrows
+of places behind raw pointers (`&mut (*p).f`) to this function. -/
+@[rust_fun "core::ptr::mut_ptr::{*mut @T}::as_mut_unchecked" (statefulLifetimes := [0])]
+def RawPtr.as_mut_unchecked {T : Type} [Pointee T] (p : MutRawPtr T) :
+    Result (T × (T → Result Unit)) :=
+  Aeneas.Std.bind p.take fun value => .ok (value, p.revive)
+
+/-- `&*p`: like `as_mut_unchecked`, the value is moved out while the borrow is live, so that
+writing through another pointer fails (this is conservative: reading through another pointer
+also fails), and brought back unchanged when the borrow ends. -/
+@[rust_fun "core::ptr::const_ptr::{*const @T}::as_ref_unchecked" (statefulLifetimes := [0])]
+def RawPtr.as_ref_unchecked {T : Type} [Pointee T] (p : RawPtr T M) : Result (T × Result Unit) :=
+  Aeneas.Std.bind p.take fun value => .ok (value, p.revive value)
+
+attribute [rust_fun "core::ptr::mut_ptr::{*mut @T}::as_ref_unchecked" (statefulLifetimes := [0])]
+  RawPtr.as_ref_unchecked
+
+/-- Not a Rust function: the null pointer. The allocation `0` is never allocated (see
+`Heap.freshBase`): the pointers to it can not be dereferenced. -/
+def RawPtr.null : RawPtr T M := ⟨0, 0⟩
+
+@[rust_fun "core::ptr::null" -canFail -lift]
+def core.ptr.null (T : Type _) : ConstRawPtr T := RawPtr.null
+
+@[rust_fun "core::ptr::null_mut" -canFail -lift]
+def core.ptr.null_mut (T : Type _) : MutRawPtr T := RawPtr.null
+
+/-- Not a Rust function: `q` points to the live cell of a box allocation (see `Box::into_raw`). -/
+def RawPtr.LiveBox {T : Type} [Pointee T] (q : RawPtr T M) (h : Heap) : Prop :=
+  Heap.contains h (Pointee.Cell T) q.addr ∧ Heap.isBoxEnd h (q.addr.add 1)
+
+/-- Not a Rust class: `nonZero T = true` if the Rust type modelled by `T` is known not to be
+zero-sized. Different slots of the same allocation, or live allocations, then have different
+addresses. By default (in particular in generic code, and for `MaybeUninit<()>`, whose Lean model
+has two values but which is zero-sized) the type may be zero-sized. The extraction derives the
+instances of the structures from their fields (see `RawPtr.eq`); adding an instance is an
+assumption. -/
+class NonZeroSized (T : Type) where
+  nonZero : Bool
+
+instance (priority := low) NonZeroSized.default : NonZeroSized T := ⟨false⟩
+instance : NonZeroSized (UScalar ty) := ⟨true⟩
+instance : NonZeroSized (IScalar ty) := ⟨true⟩
+instance : NonZeroSized Bool := ⟨true⟩
+instance : NonZeroSized Char := ⟨true⟩
+instance : NonZeroSized (RawPtr T M) := ⟨true⟩
+instance [NonZeroSized T] : NonZeroSized (Option T) := ⟨NonZeroSized.nonZero T⟩
+
+/-- Pointer comparison (`==` on raw pointers, `NonNull`). The model does not know the addresses:
+two pointers are equal if they are the same. Otherwise they are different if they point to
+different slots of the same allocation, or to two live box allocations (live allocations do not
+overlap), and the pointee is not zero-sized (`NonZeroSized`). In the other cases the comparison
+fails: in particular, the pointers obtained from borrows (`from_mut`, `as_ptr`, `NonNull::from`...)
+point to fresh copies of the borrowed values, whose actual addresses are those of the borrowed
+values, and freed allocations may share their addresses with new ones. -/
+def RawPtr.eq {T : Type} [Pointee T] [NonZeroSized T] (p q : RawPtr T M) : Result Bool :=
+  if p.addr = q.addr then .ok true
+  else Result.guardedModify
+    (fun h => NonZeroSized.nonZero T ∧ (p.base = q.base ∨ p.LiveBox h ∧ q.LiveBox h))
+    fun h _ => (false, h)
+
+/-- `!=` on pointers (see `RawPtr.eq`). -/
+def RawPtr.ne {T : Type} [Pointee T] [NonZeroSized T] (p q : RawPtr T M) : Result Bool :=
+  Aeneas.Std.bind (p.eq q) fun b => .ok (!b)
 
 inductive ScalarKind where
 | Signed (ty : IScalarTy)
@@ -739,6 +807,100 @@ theorem core.ptr.end_from_mut.spec (q : MutRawPtr T) (value : T) :
     ⦃ q ↦ value ⦄ core.ptr.end_from_mut q ⦃ result => ⌜result = value⌝⦄ :=
   WP.ispec_mono (RawPtr.take.spec q value) (by iframe) (by iframe)
 
+@[step]
+theorem RawPtr.as_mut_unchecked.spec (q : MutRawPtr T) (value : T) :
+    ⦃ q ↦ value ⦄ q.as_mut_unchecked
+      ⦃ (result, back) => ⌜result = value ∧ back = q.revive⌝ ∗ q ↦† 1⦄ := by
+  unfold RawPtr.as_mut_unchecked
+  apply WP.ispec_bind (RawPtr.take.spec q value)
+  · iframe
+  · intro v
+    apply (ispec_ok _).2
+    iframe
+
+@[step]
+theorem RawPtr.as_ref_unchecked.spec (q : RawPtr T M) (value : T) :
+    ⦃ q ↦ value ⦄ q.as_ref_unchecked
+      ⦃ (result, back) => ⌜result = value ∧ back = q.revive value⌝ ∗ q ↦† 1⦄ := by
+  unfold RawPtr.as_ref_unchecked
+  apply WP.ispec_bind (RawPtr.take.spec q value)
+  · iframe
+  · intro v
+    apply (ispec_ok _).2
+    iframe
+
+theorem RawPtr.eq.spec_self [NonZeroSized T] (q : RawPtr T M) :
+    ⦃ emp ⦄ q.eq q ⦃ b => ⌜b = true⌝⦄ := by
+  rw [RawPtr.eq, if_pos rfl]
+  apply (ispec_ok _).2
+  iframe
+
+/-- Two different pointers into the same allocation are different. -/
+theorem RawPtr.eq.spec_same_alloc [NonZeroSized T] (hNZ : NonZeroSized.nonZero T)
+    {p q : RawPtr T M} (hNe : p ≠ q) (hBase : p.base = q.base) : ⦃ emp ⦄ p.eq q ⦃ b => ⌜b = false⌝⦄ := by
+  rw [RawPtr.eq, if_neg fun h => hNe (RawPtr.addr_injective h)]
+  apply ispec_guardedModify
+  intro h hEmp frame hCompatible
+  exact ⟨⟨hNZ, .inl hBase⟩, h, hCompatible, rfl, (pure_holds h).mpr rfl⟩
+
+/-- Two pointers to different live box allocations are different. -/
+theorem RawPtr.eq.spec_boxes [NonZeroSized T] (hNZ : NonZeroSized.nonZero T)
+    {p q : RawPtr T M} (hNe : p ≠ q)
+    (v w : T) :
+    ⦃ p ↦ v ∗ p.boxed ∗ q ↦ w ∗ q.boxed ⦄ p.eq q
+      ⦃ b => ⌜b = false⌝ ∗ (p ↦ v ∗ p.boxed ∗ q ↦ w ∗ q.boxed)⦄ := by
+  rw [RawPtr.eq, if_neg fun h => hNe (RawPtr.addr_injective h)]
+  apply ispec_guardedModify
+  intro h hPre frame hCompatible
+  have hSub : Heap.Sub h (h ∪ frame) := Heap.Sub.union_left hCompatible
+  obtain ⟨h₁, h₂, hCompatible₁₂, rfl, hP, h₂₃⟩ := hPre
+  obtain ⟨h₂, h₃, hCompatible₂₃, rfl, hPBoxed, h₃₄⟩ := h₂₃
+  obtain ⟨h₃, h₄, hCompatible₃₄, rfl, hQ, hQBoxed⟩ := h₃₄
+  have hSub₁ : Heap.Sub h₁ (h₁ ∪ (h₂ ∪ (h₃ ∪ h₄))) := Heap.Sub.union_left hCompatible₁₂
+  have hSub₂ : Heap.Sub h₂ (h₁ ∪ (h₂ ∪ (h₃ ∪ h₄))) :=
+    (Heap.Sub.union_left hCompatible₂₃).trans (Heap.Sub.union_right hCompatible₁₂)
+  have hSub₃ : Heap.Sub h₃ (h₁ ∪ (h₂ ∪ (h₃ ∪ h₄))) :=
+    ((Heap.Sub.union_left hCompatible₃₄).trans (Heap.Sub.union_right hCompatible₂₃)).trans
+      (Heap.Sub.union_right hCompatible₁₂)
+  have hSub₄ : Heap.Sub h₄ (h₁ ∪ (h₂ ∪ (h₃ ∪ h₄))) :=
+    ((Heap.Sub.union_right hCompatible₃₄).trans (Heap.Sub.union_right hCompatible₂₃)).trans
+      (Heap.Sub.union_right hCompatible₁₂)
+  refine ⟨⟨hNZ, .inr ⟨⟨?_, ?_⟩, ⟨?_, ?_⟩⟩⟩, _, hCompatible, rfl, ?_⟩
+  · exact RawPtr.contains_of_pointsTo ((p ↦ v).up_closed hP (hSub₁.trans hSub))
+  · exact Heap.Sub.isBoxEnd ((show Heap.Sub (Heap.boxEnd (p.addr.add 1)) h₂ from hPBoxed).trans
+      (hSub₂.trans hSub))
+  · exact RawPtr.contains_of_pointsTo ((q ↦ w).up_closed hQ (hSub₃.trans hSub))
+  · exact Heap.Sub.isBoxEnd ((show Heap.Sub (Heap.boxEnd (q.addr.add 1)) h₄ from hQBoxed).trans
+      (hSub₄.trans hSub))
+  · exact (sep_pure_l _ _ _).mpr
+      ⟨rfl, ⟨h₁, _, hCompatible₁₂, rfl, hP, ⟨h₂, _, hCompatible₂₃, rfl, hPBoxed,
+        ⟨h₃, h₄, hCompatible₃₄, rfl, hQ, hQBoxed⟩⟩⟩⟩
+
+/-- Comparing a pointer to a borrow view (whose allocation ends with a dead slot, see
+`core.ptr.from_mut.spec_view`) with a pointer into another allocation fails. -/
+theorem RawPtr.eq.fails_view [NonZeroSized T] {p q : RawPtr T M} (hBase : p.base ≠ q.base) :
+    ifails ((p.shift 1) ↦† 1) (p.eq q) := by
+  rw [RawPtr.eq, if_neg fun h => hBase (congrArg Prod.fst h)]
+  rw [RawPtr.pointsToDead_one]
+  apply ifails_guardedModify
+  intro h hDead h' hSub hPre
+  rcases hPre.2 with hEq | ⟨⟨_, hBox⟩, _⟩
+  · exact hBase hEq
+  · exact Heap.Sub.not_isBoxEnd (hDead.trans hSub) hBox
+
+/-- Comparing two pointers to different slots of a type which may be zero-sized fails. -/
+theorem RawPtr.eq.fails_zero_sized [NonZeroSized T] (hZ : NonZeroSized.nonZero T = false)
+    {p q : RawPtr T M} (v w : T) : ifails (p ↦ v ∗ q ↦ w) (p.eq q) := by
+  by_cases hA : p.addr = q.addr
+  · refine ifails_mono (P' := ⌜False⌝ ∗ emp) ?_ (ifails_ipure False.elim)
+    rw [sep_emp_r_eq]
+    rw [RawPtr.addr_injective hA]
+    exact owns_cell_exclusive q.addr _ _
+  · rw [RawPtr.eq, if_neg hA]
+    apply ifails_guardedModify
+    intro _ _ _ _ hPre
+    exact absurd hPre.1 (by simp [hZ])
+
 namespace RawPtr
 
 theorem take_set (values : List α) (i : Nat) (value : α) :
@@ -852,6 +1014,21 @@ theorem take.fails_cell (q : RawPtr T M) (content : Option (Pointee.Cell T))
   rw [Heap.read_of_sub ((show Heap.Sub (Heap.cell q.addr content) h from hPointsTo).trans hSub),
     hNone] at hValid
   exact Bool.false_ne_true hValid
+
+/-- Moving a value out of a dead slot (freed, or moved out by a borrow) fails. -/
+theorem take.fails_dead (q : RawPtr T M) : ifails (q ↦† 1) q.take := by
+  rw [pointsToDead_one]
+  apply ifails_guardedModify
+  intro h hDead h' hSub hReadable
+  exact Heap.not_contains_of_dead (Heap.Sub.dead (hDead.trans hSub)) hReadable.contains
+
+/-- Borrowing a value which is already borrowed mutably (its slot is dead) fails. -/
+theorem as_mut_unchecked.fails_dead (q : MutRawPtr T) : ifails (q ↦† 1) q.as_mut_unchecked :=
+  ifails_bind_left (take.fails_dead q)
+
+/-- Borrowing a value which is already borrowed (its slot is dead) fails. -/
+theorem as_ref_unchecked.fails_dead (q : RawPtr T M) : ifails (q ↦† 1) q.as_ref_unchecked :=
+  ifails_bind_left (take.fails_dead q)
 
 end RawPtr
 

@@ -306,4 +306,19 @@ def core.cmp.PartialEqBox {T : Type _} (PartialEqInst : core.cmp.PartialEq T T) 
   eq := alloc.boxed.PartialEqBox.eq PartialEqInst
 }
 
+@[expose, rust_fun
+  "core::option::{core::cmp::PartialEq<core::option::Option<@T>, core::option::Option<@T>>}::eq"]
+def core.option.PartialEqOption.eq {T : Type _} (PartialEqInst : core.cmp.PartialEq T T) :
+    Option T → Option T → Result Bool
+  | none, none => ok true
+  | some x, some y => PartialEqInst.eq x y
+  | _, _ => ok false
+
+@[expose, reducible, rust_trait_impl
+  "core::cmp::PartialEq<core::option::Option<@T>, core::option::Option<@T>>"]
+def core.cmp.PartialEqOption {T : Type _} (PartialEqInst : core.cmp.PartialEq T T) :
+    core.cmp.PartialEq (Option T) (Option T) := {
+  eq := core.option.PartialEqOption.eq PartialEqInst
+}
+
 end Aeneas.Std
