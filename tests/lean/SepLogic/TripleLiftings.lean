@@ -156,7 +156,7 @@ example (x : Nat) :
 def partialAlloc (x : Nat) := into_raw x
 
 @[step] theorem partialAlloc.spec (x : Nat) :
-    ⦃ emp ⦄ partialAlloc x ⦃ p => p ↦ x ⦄div :=
+    ⦃ emp ⦄ partialAlloc x ⦃ p => p ↦ x ∗ p.boxed ⦄div :=
   ispec_dispec (into_raw.spec x)
 
 example (x : Nat) :

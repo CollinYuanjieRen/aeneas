@@ -648,7 +648,7 @@ example : ⦃ emp ⦄ into_raw (0 : Nat) ⦃ _ => ⌜True⌝⦄ := by
 
 example : ¬ ∃ q, into_raw (0 : Nat) = Result.ok q := by
   rintro ⟨q, hq⟩
-  simp [into_raw, Aeneas.Std.RawPtr.materialize,
+  simp [into_raw, Aeneas.Std.RawPtr.allocate,
     Result.guardedModify] at hq
 
 namespace LegacyWPExamples

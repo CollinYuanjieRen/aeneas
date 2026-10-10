@@ -65,40 +65,40 @@ that raw accesses while the slice is live fail). The returned back computations 
 borrow ends (`statefulLifetimes`). -/
 
 /-- Not a Rust function: `takeRange` of `len` slots, as a slice. -/
-def RawPtr.takeSlice {T : Type} (q : RawPtr T M) (len : Usize) : Result (Slice T) := do
+def RawPtr.takeSlice {T : Type} [Pointee T] (q : RawPtr T M) (len : Usize) : Result (Slice T) := do
   let values ← q.takeRange len.val
   if h : values.length ≤ Usize.max then .ok (Slice.from values h) else .fail .undef
 
 /-- End of the shared borrow of `as_ptr`: the slots must still hold `s` (writing through a const
 pointer cast to mut is UB), and are killed. -/
-def Slice.end_as_ptr {T : Type} (s : Slice T) (p : ConstRawPtr T) : Result Unit := do
+def Slice.end_as_ptr {T : Type} [Pointee T] (s : Slice T) (p : ConstRawPtr T) : Result Unit := do
   let values ← p.takeRange s.length
   Result.require (values = s.val)
 
 /-- End of the mutable borrow of `as_mut_ptr`: the slots are killed and become the new slice. -/
-def Slice.end_as_mut_ptr {T : Type} (s : Slice T) (p : MutRawPtr T) : Result (Slice T) :=
+def Slice.end_as_mut_ptr {T : Type} [Pointee T] (s : Slice T) (p : MutRawPtr T) : Result (Slice T) :=
   p.takeSlice s.len
 
 @[rust_fun "core::slice::{[@T]}::as_ptr" (statefulLifetimes := [0])]
-def Slice.as_ptr {T : Type} (s : Slice T) : Result (ConstRawPtr T × Result Unit) :=
+def Slice.as_ptr {T : Type} [Pointee T] (s : Slice T) : Result (ConstRawPtr T × Result Unit) :=
   Aeneas.Std.bind (RawPtr.materialize s.val) fun p => .ok (p, Slice.end_as_ptr s p)
 
 @[rust_fun "core::slice::{[@T]}::as_mut_ptr" (statefulLifetimes := [0])]
-def Slice.as_mut_ptr {T : Type} (s : Slice T) : Result (MutRawPtr T × Result (Slice T)) :=
+def Slice.as_mut_ptr {T : Type} [Pointee T] (s : Slice T) : Result (MutRawPtr T × Result (Slice T)) :=
   Aeneas.Std.bind (RawPtr.materialize s.val) fun p => .ok (p, Slice.end_as_mut_ptr s p)
 
 /-- Back function of `from_raw_parts_mut`: revives the slots with the final slice. -/
-def core.slice.raw.from_raw_parts_mut.back {T : Type} (p : MutRawPtr T) (len : Usize)
+def core.slice.raw.from_raw_parts_mut.back {T : Type} [Pointee T] (p : MutRawPtr T) (len : Usize)
     (s : Slice T) : Result Unit :=
   if s.length = len.val then p.reviveRange s.val else .fail .undef
 
 @[rust_fun "core::slice::raw::from_raw_parts" (statefulLifetimes := [0])]
-def core.slice.raw.from_raw_parts {T : Type} (p : ConstRawPtr T) (len : Usize) :
+def core.slice.raw.from_raw_parts {T : Type} [Pointee T] (p : ConstRawPtr T) (len : Usize) :
     Result (Slice T × Result Unit) :=
   Aeneas.Std.bind (p.takeSlice len) fun s => .ok (s, p.reviveRange s.val)
 
 @[rust_fun "core::slice::raw::from_raw_parts_mut" (statefulLifetimes := [0])]
-def core.slice.raw.from_raw_parts_mut {T : Type} (p : MutRawPtr T) (len : Usize) :
+def core.slice.raw.from_raw_parts_mut {T : Type} [Pointee T] (p : MutRawPtr T) (len : Usize) :
     Result (Slice T × (Slice T → Result Unit)) :=
   Aeneas.Std.bind (p.takeSlice len) fun s =>
     .ok (s, core.slice.raw.from_raw_parts_mut.back p len)
@@ -106,7 +106,7 @@ def core.slice.raw.from_raw_parts_mut {T : Type} (p : MutRawPtr T) (len : Usize)
 /-! ### END Trusted definitions -/
 
 @[step]
-theorem RawPtr.takeSlice.spec {T : Type} (q : RawPtr T M) (len : Usize) (values : List T)
+theorem RawPtr.takeSlice.spec {T : Type} [Pointee T] (q : RawPtr T M) (len : Usize) (values : List T)
     (hLen : len.val = values.length) :
     ⦃ q ↦* values ⦄ q.takeSlice len ⦃ s => ⌜s.val = values⌝ ∗ q ↦† len.val⦄ := by
   unfold RawPtr.takeSlice
@@ -120,7 +120,7 @@ theorem RawPtr.takeSlice.spec {T : Type} (q : RawPtr T M) (len : Usize) (values 
     iframe
 
 @[step]
-theorem Slice.as_ptr.spec {T : Type} (s : Slice T) :
+theorem Slice.as_ptr.spec {T : Type} [Pointee T] (s : Slice T) :
     ⦃ emp ⦄ s.as_ptr ⦃ (p, back) => ⌜back = Slice.end_as_ptr s p⌝ ∗ p ↦* s.val⦄ := by
   unfold Slice.as_ptr
   apply WP.ispec_bind (RawPtr.materialize.spec (M := .Const) s.val)
@@ -130,7 +130,7 @@ theorem Slice.as_ptr.spec {T : Type} (s : Slice T) :
     iframe
 
 @[step]
-theorem Slice.end_as_ptr.spec {T : Type} (s : Slice T) (p : ConstRawPtr T) :
+theorem Slice.end_as_ptr.spec {T : Type} [Pointee T] (s : Slice T) (p : ConstRawPtr T) :
     ⦃ p ↦* s.val ⦄ Slice.end_as_ptr s p ⦃ emp⦄ := by
   unfold Slice.end_as_ptr
   apply WP.ispec_bind (RawPtr.takeRange.spec p s.val)
@@ -140,7 +140,7 @@ theorem Slice.end_as_ptr.spec {T : Type} (s : Slice T) (p : ConstRawPtr T) :
     apply WP.ispec_mono (Result.require.spec (by assumption)) <;> iframe
 
 @[step]
-theorem Slice.as_mut_ptr.spec {T : Type} (s : Slice T) :
+theorem Slice.as_mut_ptr.spec {T : Type} [Pointee T] (s : Slice T) :
     ⦃ emp ⦄ s.as_mut_ptr ⦃ (p, back) => ⌜back = Slice.end_as_mut_ptr s p⌝ ∗ p ↦* s.val⦄ := by
   unfold Slice.as_mut_ptr
   apply WP.ispec_bind (RawPtr.materialize.spec (M := .Mut) s.val)
@@ -150,14 +150,14 @@ theorem Slice.as_mut_ptr.spec {T : Type} (s : Slice T) :
     iframe
 
 @[step]
-theorem Slice.end_as_mut_ptr.spec {T : Type} (s : Slice T) (p : MutRawPtr T) (values : List T)
+theorem Slice.end_as_mut_ptr.spec {T : Type} [Pointee T] (s : Slice T) (p : MutRawPtr T) (values : List T)
     (hLen : values.length = s.length) :
     ⦃ p ↦* values ⦄ Slice.end_as_mut_ptr s p ⦃ s' => ⌜s'.val = values⌝⦄ := by
   unfold Slice.end_as_mut_ptr
   apply WP.ispec_mono (RawPtr.takeSlice.spec p s.len values (by simp [hLen])) <;> iframe
 
 @[step]
-theorem core.slice.raw.from_raw_parts.spec {T : Type} (p : ConstRawPtr T) (len : Usize)
+theorem core.slice.raw.from_raw_parts.spec {T : Type} [Pointee T] (p : ConstRawPtr T) (len : Usize)
     (values : List T) (hLen : len.val = values.length) :
     ⦃ p ↦* values ⦄ core.slice.raw.from_raw_parts p len
       ⦃ (s, back) => ⌜s.val = values⌝ ∗ ⌜back = p.reviveRange s.val⌝ ∗ p ↦† s.val.length⦄ := by
@@ -171,7 +171,7 @@ theorem core.slice.raw.from_raw_parts.spec {T : Type} (p : ConstRawPtr T) (len :
     iframe
 
 /-- `from_raw_parts` on the first `len` slots of a longer range. -/
-theorem core.slice.raw.from_raw_parts.spec_prefix {T : Type} (p : ConstRawPtr T) (len : Usize)
+theorem core.slice.raw.from_raw_parts.spec_prefix {T : Type} [Pointee T] (p : ConstRawPtr T) (len : Usize)
     (values : List T) (hLen : len.val ≤ values.length) :
     ⦃ p ↦* values ⦄ core.slice.raw.from_raw_parts p len
       ⦃ (s, back) => ⌜s.val = values.take len.val⌝ ∗ ⌜back = p.reviveRange s.val⌝ ∗
@@ -188,7 +188,7 @@ theorem core.slice.raw.from_raw_parts.spec_prefix {T : Type} (p : ConstRawPtr T)
     iframe
 
 @[step]
-theorem core.slice.raw.from_raw_parts_mut.spec {T : Type} (p : MutRawPtr T) (len : Usize)
+theorem core.slice.raw.from_raw_parts_mut.spec {T : Type} [Pointee T] (p : MutRawPtr T) (len : Usize)
     (values : List T) (hLen : len.val = values.length) :
     ⦃ p ↦* values ⦄ core.slice.raw.from_raw_parts_mut p len
       ⦃ (s, back) => ⌜s.val = values⌝ ∗ ⌜back = core.slice.raw.from_raw_parts_mut.back p len⌝ ∗
@@ -201,12 +201,48 @@ theorem core.slice.raw.from_raw_parts_mut.spec {T : Type} (p : MutRawPtr T) (len
     iframe
 
 @[step]
-theorem core.slice.raw.from_raw_parts_mut.back.spec {T : Type} (p : MutRawPtr T) (len : Usize)
+theorem core.slice.raw.from_raw_parts_mut.back.spec {T : Type} [Pointee T] (p : MutRawPtr T) (len : Usize)
     (s : Slice T) (hLen : s.length = len.val) :
     ⦃ p ↦† len.val ⦄ core.slice.raw.from_raw_parts_mut.back p len s ⦃ p ↦* s.val⦄ := by
   unfold core.slice.raw.from_raw_parts_mut.back
   rw [if_pos hLen, ← hLen]
   exact RawPtr.reviveRange.spec p s.val
+
+/-- Moving out a range which contains a cell holding no value of the pointee (for instance, an
+uninitialized cell) fails. -/
+theorem RawPtr.takeRange.fails {T : Type} [Pointee T] (q : RawPtr T M) (values : List T)
+    (content : Option (Pointee.Cell T)) (hNone : Pointee.ofCell content = none) (n : Nat)
+    (hn : values.length < n) :
+    ifails iprop(q ↦* values ∗ (q.shift values.length) ↦? content) (q.takeRange n) := by
+  induction values generalizing q n with
+  | nil =>
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp at hn; omega⟩
+    rw [RawPtr.takeRange]
+    apply ifails_bind_left
+    refine ifails_mono ?_ (RawPtr.take.fails_cell q content hNone)
+    simp only [RawPtr.pointsToRange_nil, List.length_nil, RawPtr.shift_zero]
+    iframe
+  | cons value values ih =>
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp at hn; omega⟩
+    rw [RawPtr.takeRange]
+    have hF := ispec_frame (RawPtr.take.spec q value)
+      iprop((q.shift 1) ↦* values ∗ ((q.shift 1).shift values.length) ↦? content)
+    refine ifails_mono ?_ (ifails_bind hF fun x => ifails_bind_left
+      (ifails_mono ?_ (ih (q.shift 1) m (by simp at hn; omega))))
+    · rw [RawPtr.pointsToRange_cons, List.length_cons, RawPtr.shift_shift, Nat.add_comm]
+      iframe
+    · exact SepLogic.sep_elim_left _ _
+
+/-- `from_raw_parts` on a range which contains an uninitialized cell fails. -/
+theorem core.slice.raw.from_raw_parts.fails {T : Type} [Pointee T] (p : ConstRawPtr T)
+    (len : Usize) (values : List T) (content : Option (Pointee.Cell T))
+    (hNone : Pointee.ofCell content = none) (hLen : values.length < len.val) :
+    ifails iprop(p ↦* values ∗ (p.shift values.length) ↦? content)
+      (core.slice.raw.from_raw_parts p len) := by
+  unfold core.slice.raw.from_raw_parts RawPtr.takeSlice
+  simp only [bind_tc_eq]
+  exact ifails_bind_left (ifails_bind_left
+    (RawPtr.takeRange.fails p values content hNone len.val hLen))
 
 instance {α : Type u} : GetElem (Slice α) Nat α (fun a i => i < a.val.length) where
   getElem a i h := getElem a.val i h

@@ -20,11 +20,11 @@ def allocAndReturn : Result (MutRawPtr Nat) := do
   let p ← into_raw 1
   pure p
 
-example : ⦃ emp ⦄ allocAndReturn ⦃ p => p ↦ 1⦄ := by
+example : ⦃ emp ⦄ allocAndReturn ⦃ p => p ↦ 1 ∗ p.boxed⦄ := by
   unfold allocAndReturn
   step*
 
-example : ⦃ emp ⦄ allocAndReturn ⦃ p => p ↦ 1⦄ := by
+example : ⦃ emp ⦄ allocAndReturn ⦃ p => p ↦ 1 ∗ p.boxed⦄ := by
   unfold allocAndReturn
   step
   step
@@ -38,7 +38,7 @@ def readFreeReturn (p : MutRawPtr Nat) : Result Nat := do
   pure (value + 1)
 
 example (p : MutRawPtr Nat) (value : Nat) :
-    ⦃ p ↦ value ⦄ readFreeReturn p
+    ⦃ p ↦ value ∗ p.boxed ⦄ readFreeReturn p
       ⦃ result => ⌜opaqueStepResult result (value + 1)⌝⦄ := by
   unfold readFreeReturn
   fail_if_success
@@ -49,7 +49,7 @@ example (p : MutRawPtr Nat) (value : Nat) :
   simp only [opaqueStepResult]
   agrind
 
-example : ⦃ emp ⦄ allocAndReturn ⦃ p => iprop(⌜opaqueStepResult 1 1⌝ ∗ p ↦ 1)⦄ := by
+example : ⦃ emp ⦄ allocAndReturn ⦃ p => iprop(⌜opaqueStepResult 1 1⌝ ∗ p ↦ 1 ∗ p.boxed)⦄ := by
   unfold allocAndReturn
   step* 1
   step
@@ -78,7 +78,7 @@ example (n : Nat) : ⦃ emp ⦄ (pure n : Result Nat) ⦃ result => ⌜result = 
   step with pure.spec
 
 example (p : MutRawPtr Nat) (value : Nat) :
-    ⦃ p ↦ value ⦄ readFreeReturn p
+    ⦃ p ↦ value ∗ p.boxed ⦄ readFreeReturn p
       ⦃ result => ⌜result = value + 1⌝⦄ := by
   unfold readFreeReturn
   step*

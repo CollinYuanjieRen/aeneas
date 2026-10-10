@@ -60,22 +60,22 @@ private theorem mem_union {address : Loc} {h₁ h₂ : Heap} :
 private theorem lookup_union_left {address : Loc}
     {h₁ h₂ : Heap} (hMem : address ∈ h₁) :
     (h₁ ∪ h₂).lookup address = h₁.lookup address :=
-  congrArg Option.join (Finmap.lookup_union_left hMem)
+  Finmap.lookup_union_left hMem
 
-private theorem mem_of_lookup_eq_some {address : Loc} {h : Heap} {cell : HeapCell}
-    (hLookup : h.lookup address = some cell) : address ∈ h :=
-  Finmap.mem_of_lookup_eq_some (Option.join_eq_some_iff.mp hLookup)
+private theorem mem_of_lookup_eq_some {address : Loc} {h : Heap} {s : Slot}
+    (hLookup : h.lookup address = some s) : address ∈ h :=
+  Finmap.mem_of_lookup_eq_some hLookup
 
 private theorem mem_insert {address insertedAddress : Loc}
-    {cell : Option HeapCell} {h : Heap} :
-    address ∈ h.insert insertedAddress cell ↔
+    {s : Slot} {h : Heap} :
+    address ∈ h.insert insertedAddress s ↔
       address = insertedAddress ∨ address ∈ h :=
   Finmap.mem_insert
 
 private theorem insert_union {address : Loc}
-    {cell : Option HeapCell} {h₁ h₂ : Heap} :
-    (h₁ ∪ h₂).insert address cell =
-      h₁.insert address cell ∪ h₂ := by
+    {s : Slot} {h₁ h₂ : Heap} :
+    (h₁ ∪ h₂).insert address s =
+      h₁.insert address s ∪ h₂ := by
   apply Heap.ext_impl
   exact Finmap.insert_union
 
@@ -132,52 +132,53 @@ theorem union_right_cancel {h₁ h₂ frame : Heap}
   apply Heap.ext_impl
   exact (Finmap.union_cancel hCompatible₁ hCompatible₂).mp (congrArg Heap.impl hEq)
 
-theorem mem_singleton {α : Type} {l : Loc} {value : α} {address : Loc} :
-    address ∈ singleton l value ↔ address = l := by
-  show address ∈ (Finmap.singleton l (some ⟨α, value⟩ : Option HeapCell) : HeapImpl) ↔ _
-  exact Finmap.mem_singleton _ _ _
+theorem mem_slot {l : Loc} {s : Slot} {address : Loc} :
+    address ∈ slot l s ↔ address = l :=
+  Finmap.mem_singleton _ _ _
 
-theorem mem_endMarker {l address : Loc} : address ∈ endMarker l ↔ address = l := by
-  show address ∈ (Finmap.singleton l (none : Option HeapCell) : HeapImpl) ↔ _
-  exact Finmap.mem_singleton _ _ _
+theorem mem_cell {α : Type} {l : Loc} {content : Option α} {address : Loc} :
+    address ∈ cell l content ↔ address = l :=
+  mem_slot
 
-private theorem lookup_singleton {α : Type} (l : Loc) (value : α) :
-    (singleton l value).lookup l = some ⟨α, value⟩ := by
-  simp [singleton, Heap.lookup]
+theorem mem_endMarker {l address : Loc} : address ∈ endMarker l ↔ address = l :=
+  mem_slot
+
+private theorem lookup_slot (l : Loc) (s : Slot) : (slot l s).lookup l = some s := by
+  simp [slot, Heap.lookup]
 
 @[simp]
 theorem not_contains_empty {α : Type} (l : Loc) :
     ¬ contains (∅ : Heap) α l := by
-  change ¬ match (Finmap.lookup l (∅ : HeapImpl)).join with
-    | none => False
-    | some ⟨β, _⟩ => β = α
+  change ¬ match Finmap.lookup l (∅ : HeapImpl) with
+    | some (.live β _) => β = α
+    | _ => False
   simp
 
-@[simp] theorem rangeHeap_nil {α : Type} (l : Loc) :
-    rangeHeap l ([] : List α) = empty := rfl
+@[simp] theorem cells_nil {α : Type} (l : Loc) :
+    cells l ([] : List (Option α)) = empty := rfl
 
-@[simp] theorem rangeHeap_cons {α : Type} (l : Loc) (value : α)
-    (rest : List α) :
-    rangeHeap l (value :: rest) = singleton l value ∪ rangeHeap (l.add 1) rest :=
+@[simp] theorem cells_cons {α : Type} (l : Loc) (content : Option α)
+    (rest : List (Option α)) :
+    cells l (content :: rest) = cell l content ∪ cells (l.add 1) rest :=
   rfl
 
-@[simp] theorem rangeHeap_singleton {α : Type} (l : Loc) (value : α) :
-    rangeHeap l [value] = singleton l value := by
-  rw [rangeHeap_cons, rangeHeap_nil, Heap.union_empty]
+@[simp] theorem cells_singleton {α : Type} (l : Loc) (content : Option α) :
+    cells l [content] = cell l content := by
+  rw [cells_cons, cells_nil, Heap.union_empty]
 
-theorem mem_rangeHeap {α : Type} {l : Loc} {values : List α} {address : Loc} :
-    address ∈ rangeHeap l values ↔
-      ∃ i, i < values.length ∧ address = l.add i := by
-  induction values generalizing l with
+theorem mem_cells {α : Type} {l : Loc} {contents : List (Option α)} {address : Loc} :
+    address ∈ cells l contents ↔
+      ∃ i, i < contents.length ∧ address = l.add i := by
+  induction contents generalizing l with
   | nil =>
-      simp only [rangeHeap_nil, List.length_nil, Nat.not_lt_zero, false_and,
+      simp only [cells_nil, List.length_nil, Nat.not_lt_zero, false_and,
         exists_false, iff_false]
       intro hMem
       exact (Finmap.notMem_empty (a := address)) hMem
-  | cons value rest ih =>
+  | cons content rest ih =>
       have hShift : ∀ i : Nat, (l.add 1).add i = l.add (i + 1) := by
         intro i; rw [Loc.add_add, Nat.add_comm]
-      rw [rangeHeap_cons, Heap.mem_union, mem_singleton, ih]
+      rw [cells_cons, Heap.mem_union, mem_cell, ih]
       constructor
       · rintro (rfl | ⟨i, hi, rfl⟩)
         · exact ⟨0, by simp, rfl⟩
@@ -187,23 +188,23 @@ theorem mem_rangeHeap {α : Type} {l : Loc} {values : List α} {address : Loc} :
         | zero => exact Or.inl rfl
         | succ j => exact Or.inr ⟨j, by simpa using hi, by rw [hShift]⟩
 
-theorem rangeHeap_append {α : Type} (l : Loc) (xs ys : List α) :
-    rangeHeap l (xs ++ ys) =
-      rangeHeap l xs ∪ rangeHeap (l.add xs.length) ys := by
+theorem cells_append {α : Type} (l : Loc) (xs ys : List (Option α)) :
+    cells l (xs ++ ys) =
+      cells l xs ∪ cells (l.add xs.length) ys := by
   induction xs generalizing l with
   | nil => simp
-  | cons value rest ih =>
+  | cons content rest ih =>
       have hShift : (l.add 1).add rest.length = l.add (rest.length + 1) := by
         rw [Loc.add_add, Nat.add_comm]
-      rw [List.cons_append, rangeHeap_cons, rangeHeap_cons, ih, List.length_cons,
+      rw [List.cons_append, cells_cons, cells_cons, ih, List.length_cons,
         hShift, Heap.union_assoc']
 
-theorem compatible_rangeHeap_append {α : Type} (l : Loc) (xs ys : List α) :
-    PartialCommMonoid.Compatible (rangeHeap l xs)
-      (rangeHeap (l.add xs.length) ys) := by
+theorem compatible_cells_append {α : Type} (l : Loc) (xs ys : List (Option α)) :
+    PartialCommMonoid.Compatible (cells l xs)
+      (cells (l.add xs.length) ys) := by
   intro address hLeft hRight
-  obtain ⟨i, hi, hL⟩ := mem_rangeHeap.mp hLeft
-  obtain ⟨j, -, hR⟩ := mem_rangeHeap.mp hRight
+  obtain ⟨i, hi, hL⟩ := mem_cells.mp hLeft
+  obtain ⟨j, -, hR⟩ := mem_cells.mp hRight
   rw [Loc.add_add] at hR
   have hOffset : l.2 + i = l.2 + (xs.length + j) :=
     (congrArg Prod.snd hL).symm.trans (congrArg Prod.snd hR)
@@ -221,24 +222,32 @@ theorem not_mem_freshBase {h : Heap} {address : Loc}
       (h.keys.image Prod.fst).sup id := hLe
   exact Nat.not_succ_le_self _ hSucc
 
-theorem compatible_freshLoc {α : Type} (h : Heap) (values : List α) :
-    PartialCommMonoid.Compatible (allocation (freshLoc h) values) h := by
+theorem compatible_freshLoc {α : Type} (h : Heap) (contents : List (Option α)) (last : Slot) :
+    PartialCommMonoid.Compatible (allocation (freshLoc h) contents last) h := by
   intro address hFresh hMem
   apply not_mem_freshBase (h := h) _ hMem
   rcases Heap.mem_union.mp hFresh with hRange | hEnd
-  · obtain ⟨i, -, rfl⟩ := mem_rangeHeap.mp hRange
+  · obtain ⟨i, -, rfl⟩ := mem_cells.mp hRange
     rfl
-  · rw [mem_endMarker.mp hEnd]
+  · rw [mem_slot.mp hEnd]
     rfl
 
-theorem sub_allocation {α : Type} (l : Loc) (values : List α) :
-    Heap.Sub (rangeHeap l values) (allocation l values) := by
-  refine ⟨_, ?_, rfl⟩
+private theorem compatible_cells_end {α : Type} (l : Loc) (contents : List (Option α))
+    (last : Slot) :
+    PartialCommMonoid.Compatible (cells l contents) (slot (l.add contents.length) last) := by
   intro address hRange hEnd
-  obtain ⟨i, hi, rfl⟩ := mem_rangeHeap.mp hRange
-  have hOffset := congrArg Prod.snd (mem_endMarker.mp hEnd)
+  obtain ⟨i, hi, rfl⟩ := mem_cells.mp hRange
+  have hOffset := congrArg Prod.snd (mem_slot.mp hEnd)
   simp only [Loc.add_snd] at hOffset
   omega
+
+theorem sub_allocation {α : Type} (l : Loc) (contents : List (Option α)) (last : Slot) :
+    Heap.Sub (cells l contents) (allocation l contents last) :=
+  ⟨_, compatible_cells_end l contents last, rfl⟩
+
+theorem compatible_allocation {α : Type} (l : Loc) (contents : List (Option α)) (last : Slot) :
+    PartialCommMonoid.Compatible (cells l contents) (slot (l.add contents.length) last) :=
+  compatible_cells_end l contents last
 
 namespace Sub
 
@@ -349,9 +358,9 @@ theorem mem_of_contains {α : Type} {h : Heap} {l : Loc}
     (hContains : contains h α l) : l ∈ h := by
   unfold contains at hContains
   split at hContains
-  · contradiction
-  · rename_i cell hLookup
+  · rename_i hLookup
     exact Heap.mem_of_lookup_eq_some hLookup
+  · contradiction
 
 theorem disjoint_contains_false {α : Type} {h₁ h₂ : Heap} {l : Loc}
     (hCompatible : PartialCommMonoid.Compatible h₁ h₂)
@@ -367,50 +376,50 @@ theorem contains_union_left {α : Type} {h₁ h₂ : Heap} {l : Loc}
   rw [Heap.lookup_union_left hMem]
   exact hContains
 
+/-- `read` only depends on the slot. -/
+private theorem read_eq_of_lookup {α : Type} {h₁ h₂ : Heap} {l : Loc}
+    (hLookup : h₁.lookup l = h₂.lookup l)
+    (hContains₁ : contains h₁ α l) (hContains₂ : contains h₂ α l) :
+    Heap.read l h₁ hContains₁ = Heap.read l h₂ hContains₂ := by
+  unfold Heap.read
+  split
+  · rename_i β content hLookup₁
+    split
+    · rename_i β₂ content₂ hLookup₂
+      have hEq : Slot.live β content = Slot.live β₂ content₂ :=
+        Option.some.inj (hLookup₁.symm.trans (hLookup.trans hLookup₂))
+      cases hEq
+      rfl
+    all_goals (rename_i hLookup₂; simp [contains, hLookup₂] at hContains₂)
+  all_goals (rename_i hLookup₁; simp [contains, hLookup₁] at hContains₁)
+
 theorem read_union_left {α : Type} {h₁ h₂ : Heap} {l : Loc}
     (hContains : contains h₁ α l) :
     Heap.read l (h₁ ∪ h₂) (contains_union_left hContains) =
-      Heap.read l h₁ hContains := by
-  have hMem : l ∈ h₁ := mem_of_contains hContains
-  unfold Heap.read
-  split
-  · rename_i hLookup
-    have hContainsUnion := contains_union_left (h₂ := h₂) hContains
-    simp [contains, hLookup] at hContainsUnion
-  · rename_i β value hLookup
-    split
-    · rename_i hLookup₁
-      simp [contains, hLookup₁] at hContains
-    · rename_i β₁ value₁ hLookup₁
-      have hCells :
-          (⟨β, value⟩ : HeapCell) = ⟨β₁, value₁⟩ := by
-        apply Option.some.inj
-        exact hLookup.symm.trans
-          ((Heap.lookup_union_left hMem).trans hLookup₁)
-      cases hCells
-      rfl
+      Heap.read l h₁ hContains :=
+  read_eq_of_lookup (Heap.lookup_union_left (mem_of_contains hContains)) _ _
 
 theorem update_union_left {α : Type} {h₁ h₂ : Heap}
-    (l : Loc) (value : α) (hContains : contains h₁ α l) :
-    Heap.update l value (h₁ ∪ h₂) (contains_union_left hContains) =
-      Heap.update l value h₁ hContains ∪ h₂ := by
+    (l : Loc) (content : Option α) (hContains : contains h₁ α l) :
+    Heap.update l content (h₁ ∪ h₂) (contains_union_left hContains) =
+      Heap.update l content h₁ hContains ∪ h₂ := by
   exact Heap.insert_union
 
-private theorem disjoint_insert_left {l : Loc} {cell : Option HeapCell}
+private theorem disjoint_insert_left {l : Loc} {s : Slot}
     {h₁ h₂ : Heap}
     (hCompatible : PartialCommMonoid.Compatible h₁ h₂) (hMem : l ∈ h₁) :
-    PartialCommMonoid.Compatible (h₁.insert l cell) h₂ := by
+    PartialCommMonoid.Compatible (h₁.insert l s) h₂ := by
   intro address hMem₁ hMem₂
   rcases Heap.mem_insert.mp hMem₁ with rfl | hMem₁
   · exact hCompatible _ hMem hMem₂
   · exact hCompatible address hMem₁ hMem₂
 
-theorem disjoint_update_left {α : Type} {l : Loc} {value : α}
+theorem disjoint_update_left {α : Type} {l : Loc} {content : Option α}
     {h₁ h₂ : Heap}
     (hCompatible : PartialCommMonoid.Compatible h₁ h₂)
     (hContains : contains h₁ α l) :
     PartialCommMonoid.Compatible
-      (Heap.update l value h₁ hContains) h₂ :=
+      (Heap.update l content h₁ hContains) h₂ :=
   disjoint_insert_left hCompatible (mem_of_contains hContains)
 
 theorem disjoint_free_left {α : Type} {l : Loc}
@@ -432,107 +441,118 @@ theorem mem_free {α : Type} {l : Loc} {h : Heap} (hContains : contains h α l) 
     l ∈ Heap.free l h hContains :=
   Heap.mem_insert.mpr (Or.inl rfl)
 
+/-- A dead slot cannot be read, written or freed. -/
+theorem not_contains_of_dead {α : Type} {l : Loc} {h : Heap} (hDead : Heap.dead h l) :
+    ¬ contains h α l := by
+  simp [contains, Heap.lookup, show h.impl.lookup l = some .dead from hDead]
+
 /-- A freed slot is dead: it cannot be read, written or freed again. -/
 theorem not_contains_free {α β : Type} {l : Loc} {h : Heap} (hContains : contains h α l) :
     ¬ contains (Heap.free l h hContains) β l := by
   simp [contains, Heap.free, Heap.insert, Heap.lookup]
 
 /-- Allocation leaves the slots already in the heap untouched. -/
-theorem contains_freshHeap_of_mem {α β : Type} {h : Heap} {values : List β} {l : Loc}
-    (hMem : l ∈ h) : contains (freshHeap h values) α l ↔ contains h α l := by
-  have hNotMem : l ∉ allocation (freshLoc h) values :=
-    fun hFresh => compatible_freshLoc h values l hFresh hMem
+theorem contains_freshHeap_of_mem {α β : Type} {h : Heap} {contents : List (Option β)}
+    {last : Slot} {l : Loc}
+    (hMem : l ∈ h) : contains (freshHeap h contents last) α l ↔ contains h α l := by
+  have hNotMem : l ∉ allocation (freshLoc h) contents last :=
+    fun hFresh => compatible_freshLoc h contents last l hFresh hMem
   unfold contains
-  rw [show (freshHeap h values).lookup l = h.lookup l from
-    congrArg Option.join (Finmap.lookup_union_right hNotMem)]
+  rw [show (freshHeap h contents last).lookup l = h.lookup l from
+    Finmap.lookup_union_right hNotMem]
 
 /-- The end marker of an allocation is in the heap, so even an empty allocation reserves its id. -/
-theorem mem_freshHeap_end {α : Type} (h : Heap) (values : List α) :
-    (freshLoc h).add values.length ∈ freshHeap h values :=
-  Heap.mem_union.mpr (Or.inl (Heap.mem_union.mpr (Or.inr (mem_endMarker.mpr rfl))))
+theorem mem_freshHeap_end {α : Type} (h : Heap) (contents : List (Option α)) (last : Slot) :
+    (freshLoc h).add contents.length ∈ freshHeap h contents last :=
+  Heap.mem_union.mpr (Or.inl (Heap.mem_union.mpr (Or.inr (mem_slot.mpr rfl))))
 
 /-- The end marker of an allocation is dead. -/
-theorem not_contains_freshHeap_end {α β : Type} (h : Heap) (values : List β) :
-    ¬ contains (freshHeap h values) α ((freshLoc h).add values.length) := by
+theorem not_contains_freshHeap_end {α β : Type} (h : Heap) (contents : List (Option β))
+    (last : Slot) (hLast : ∀ γ c, last ≠ .live γ c) :
+    ¬ contains (freshHeap h contents last) α ((freshLoc h).add contents.length) := by
   have hNotRange :
-      (freshLoc h).add values.length ∉ (rangeHeap (freshLoc h) values).impl := by
+      (freshLoc h).add contents.length ∉ (cells (freshLoc h) contents).impl := by
     intro hRange
-    obtain ⟨i, hi, hEq⟩ := mem_rangeHeap.mp hRange
+    obtain ⟨i, hi, hEq⟩ := mem_cells.mp hRange
     have hOffset := congrArg Prod.snd hEq
     simp only [Loc.add_snd] at hOffset
     omega
-  have hEnd : (freshLoc h).add values.length ∈
-      (endMarker ((freshLoc h).add values.length)).impl :=
-    mem_endMarker.mpr rfl
-  have hLookup : (freshHeap h values).lookup ((freshLoc h).add values.length) = none := by
-    show (Finmap.lookup _ (((rangeHeap (freshLoc h) values).impl ∪
-      (endMarker ((freshLoc h).add values.length)).impl) ∪ h.impl)).join = none
+  have hEnd : (freshLoc h).add contents.length ∈
+      (slot ((freshLoc h).add contents.length) last).impl :=
+    mem_slot.mpr rfl
+  have hLookup : (freshHeap h contents last).lookup ((freshLoc h).add contents.length) =
+      some last := by
+    show Finmap.lookup _ (((cells (freshLoc h) contents).impl ∪
+      (slot ((freshLoc h).add contents.length) last).impl) ∪ h.impl) = _
     rw [Finmap.lookup_union_left (Finmap.mem_union.mpr (Or.inr hEnd)),
       Finmap.lookup_union_right hNotRange]
-    simp [endMarker]
-  simp [contains, hLookup]
+    simp [slot]
+  unfold contains
+  rw [hLookup]
+  cases last with
+  | live γ c => exact absurd rfl (hLast γ c)
+  | dead | boxEnd => simp
 
-theorem disjoint_singleton {α : Type} {l l' : Loc} {value₁ value₂ : α}
+theorem disjoint_cell {α : Type} {l l' : Loc} {content₁ content₂ : Option α}
     (hNe : l ≠ l') :
     PartialCommMonoid.Compatible
-      (singleton l value₁) (singleton l' value₂) := by
+      (cell l content₁) (cell l' content₂) := by
   intro address hMem₁ hMem₂
-  exact hNe ((mem_singleton.mp hMem₁).symm.trans (mem_singleton.mp hMem₂))
+  exact hNe ((mem_cell.mp hMem₁).symm.trans (mem_cell.mp hMem₂))
 
-theorem contains_singleton {α : Type} (l : Loc) (value : α) :
-    contains (singleton l value) α l := by
-  simp [contains, singleton, Heap.lookup]
+theorem contains_cell {α : Type} (l : Loc) (content : Option α) :
+    contains (cell l content) α l := by
+  simp [contains, cell, slot, Heap.lookup]
 
-theorem read_singleton {α : Type} (l : Loc) (value : α)
-    (hContains : contains (singleton l value) α l) :
-    Heap.read l (singleton l value) hContains = value := by
+theorem read_cell {α : Type} (l : Loc) (content : Option α)
+    (hContains : contains (cell l content) α l) :
+    Heap.read l (cell l content) hContains = content := by
   unfold Heap.read
   split
-  · rename_i hLookup
-    rw [lookup_singleton] at hLookup
-    contradiction
   · rename_i β stored hLookup
-    rw [lookup_singleton] at hLookup
+    rw [show cell l content = slot l (.live α content) from rfl, lookup_slot] at hLookup
     cases hLookup
     rfl
+  all_goals (rename_i hLookup; rw [show cell l content = slot l (.live α content) from rfl,
+    lookup_slot] at hLookup; cases hLookup)
 
-theorem update_singleton {α : Type} (l : Loc)
-    (oldValue newValue : α)
-    (hContains : contains (singleton l oldValue) α l) :
-    Heap.update l newValue (singleton l oldValue) hContains =
-      singleton l newValue := by
+theorem update_cell {α : Type} (l : Loc)
+    (oldContent newContent : Option α)
+    (hContains : contains (cell l oldContent) α l) :
+    Heap.update l newContent (cell l oldContent) hContains =
+      cell l newContent := by
   apply Heap.ext_impl
-  simp [Heap.update, singleton, Heap.insert]
+  simp [Heap.update, cell, slot, Heap.insert]
 
 theorem Sub.contains {α : Type} {A h : Heap} {l : Loc} (hSub : Heap.Sub A h)
     (hContains : contains A α l) : contains h α l := by
   obtain ⟨rest, -, rfl⟩ := hSub
   exact contains_union_left hContains
 
-theorem contains_rangeHeap {α : Type} {l : Loc} {values : List α} {i : Nat}
-    (hIndex : i < values.length) : contains (rangeHeap l values) α (l.add i) := by
-  induction values generalizing l i with
+theorem contains_cells {α : Type} {l : Loc} {contents : List (Option α)} {i : Nat}
+    (hIndex : i < contents.length) : contains (cells l contents) α (l.add i) := by
+  induction contents generalizing l i with
   | nil => simp at hIndex
-  | cons value rest ih =>
-    rw [rangeHeap_cons]
+  | cons content rest ih =>
+    rw [cells_cons]
     cases i with
-    | zero => exact contains_union_left (contains_singleton l value)
+    | zero => exact contains_union_left (contains_cell l content)
     | succ j =>
       have hCompatible :
-          PartialCommMonoid.Compatible (singleton l value) (rangeHeap (l.add 1) rest) := by
-        simpa using compatible_rangeHeap_append l [value] rest
+          PartialCommMonoid.Compatible (cell l content) (cells (l.add 1) rest) := by
+        simpa using compatible_cells_append l [content] rest
       rw [PartialCommMonoid.union_comm_of_compatible hCompatible,
         show l.add (j + 1) = (l.add 1).add j by rw [Loc.add_add, Nat.add_comm]]
       exact contains_union_left (ih (by simpa using hIndex))
 
-theorem read_of_sub {α : Type} {l : Loc} {value : α} {h : Heap}
-    (hSub : Heap.Sub (singleton l value) h)
-    (hContains : contains h α l) : Heap.read l h hContains = value := by
+theorem read_of_sub {α : Type} {l : Loc} {content : Option α} {h : Heap}
+    (hSub : Heap.Sub (cell l content) h)
+    (hContains : contains h α l) : Heap.read l h hContains = content := by
   obtain ⟨rest, hCompatible, rfl⟩ := hSub
-  have hContainsSingleton := contains_singleton l value
-  rw [show hContains = contains_union_left hContainsSingleton from
+  have hContainsCell := contains_cell l content
+  rw [show hContains = contains_union_left hContainsCell from
       Subsingleton.elim _ _,
-    read_union_left hContainsSingleton, read_singleton]
+    read_union_left hContainsCell, read_cell]
 
 theorem dead_union_left {h₁ h₂ : Heap} {l : Loc} (hDead : Heap.dead h₁ l) :
     Heap.dead (h₁ ∪ h₂) l :=
@@ -540,41 +560,69 @@ theorem dead_union_left {h₁ h₂ : Heap} {l : Loc} (hDead : Heap.dead h₁ l) 
 
 theorem Sub.dead {h : Heap} {l : Loc} (hSub : Heap.Sub (endMarker l) h) : Heap.dead h l := by
   obtain ⟨rest, -, rfl⟩ := hSub
-  exact dead_union_left (by simp [Heap.dead, endMarker])
+  exact dead_union_left (by simp [Heap.dead, endMarker, slot])
 
-theorem disjoint_revive_left {α : Type} {l : Loc} {value : α} {h₁ h₂ : Heap}
+theorem Sub.isBoxEnd {h : Heap} {l : Loc} (hSub : Heap.Sub (boxEnd l) h) : Heap.isBoxEnd h l := by
+  obtain ⟨rest, -, rfl⟩ := hSub
+  exact (Finmap.lookup_union_left (Finmap.mem_of_lookup_eq_some
+    (show (boxEnd l).impl.lookup l = some .boxEnd by simp [boxEnd, slot]))).trans
+    (by simp [boxEnd, slot])
+
+theorem disjoint_revive_left {α : Type} {l : Loc} {content : Option α} {h₁ h₂ : Heap}
     (hCompatible : PartialCommMonoid.Compatible h₁ h₂) (hDead : Heap.dead h₁ l) :
-    PartialCommMonoid.Compatible (Heap.revive l value h₁ hDead) h₂ :=
+    PartialCommMonoid.Compatible (Heap.revive l content h₁ hDead) h₂ :=
   disjoint_insert_left hCompatible (Finmap.mem_of_lookup_eq_some hDead)
 
-theorem revive_union_left {α : Type} {h₁ h₂ : Heap} (l : Loc) (value : α)
+theorem revive_union_left {α : Type} {h₁ h₂ : Heap} (l : Loc) (content : Option α)
     (hDead : Heap.dead h₁ l) :
-    Heap.revive l value (h₁ ∪ h₂) (dead_union_left hDead) = Heap.revive l value h₁ hDead ∪ h₂ :=
+    Heap.revive l content (h₁ ∪ h₂) (dead_union_left hDead) =
+      Heap.revive l content h₁ hDead ∪ h₂ :=
   Heap.insert_union
 
 /-- Freeing a slot one owns leaves one owning it dead. -/
-theorem Sub.free {α : Type} {l : Loc} {value : α} {h : Heap}
-    (hSub : Heap.Sub (singleton l value) h) (hContains : Heap.contains h α l) :
+theorem Sub.free {α : Type} {l : Loc} {content : Option α} {h : Heap}
+    (hSub : Heap.Sub (cell l content) h) (hContains : Heap.contains h α l) :
     Heap.Sub (endMarker l) (Heap.free l h hContains) := by
   obtain ⟨rest, hCompatible, rfl⟩ := hSub
-  refine ⟨rest, fun a hMem => hCompatible a (mem_singleton.mpr (mem_endMarker.mp hMem)), ?_⟩
-  show (singleton l value ∪ rest).insert l none = _
+  refine ⟨rest, fun a hMem => hCompatible a (mem_cell.mpr (mem_endMarker.mp hMem)), ?_⟩
+  show (cell l content ∪ rest).insert l .dead = _
   rw [Heap.insert_union]
   congr 1
   apply Heap.ext_impl
-  simp [Heap.insert, singleton, endMarker]
+  simp [Heap.insert, cell, endMarker, slot]
 
 /-- Reviving a dead slot one owns leaves one owning it live. -/
-theorem Sub.revive {α : Type} {l : Loc} {h : Heap} (value : α)
+theorem Sub.revive {α : Type} {l : Loc} {h : Heap} (content : Option α)
     (hSub : Heap.Sub (endMarker l) h) (hDead : Heap.dead h l) :
-    Heap.Sub (singleton l value) (Heap.revive l value h hDead) := by
+    Heap.Sub (cell l content) (Heap.revive l content h hDead) := by
   obtain ⟨rest, hCompatible, rfl⟩ := hSub
-  refine ⟨rest, fun a hMem => hCompatible a (mem_endMarker.mpr (mem_singleton.mp hMem)), ?_⟩
-  show (endMarker l ∪ rest).insert l (some ⟨α, value⟩) = _
+  refine ⟨rest, fun a hMem => hCompatible a (mem_endMarker.mpr (mem_cell.mp hMem)), ?_⟩
+  show (endMarker l ∪ rest).insert l (.live α content) = _
   rw [Heap.insert_union]
   congr 1
   apply Heap.ext_impl
-  simp [Heap.insert, singleton, endMarker]
+  simp [Heap.insert, cell, endMarker, slot]
+
+/-- A slot which is not a live cell can not be read, written or freed. -/
+theorem Sub.not_contains {α : Type} {h : Heap} {l : Loc} {s : Slot} (hSub : Heap.Sub (slot l s) h)
+    (hs : ∀ β c, s ≠ .live β c) : ¬ Heap.contains h α l := by
+  obtain ⟨rest, -, rfl⟩ := hSub
+  have hLookup : (slot l s ∪ rest).lookup l = some s :=
+    (Heap.lookup_union_left (mem_slot.mpr rfl)).trans (lookup_slot l s)
+  unfold Heap.contains
+  rw [hLookup]
+  cases s with
+  | live β c => exact absurd rfl (hs β c)
+  | dead | boxEnd => simp
+
+/-- A dead slot is not the end marker of a box. -/
+theorem Sub.not_isBoxEnd {h : Heap} {l : Loc} (hSub : Heap.Sub (endMarker l) h) :
+    ¬ Heap.isBoxEnd h l := by
+  have hDead : Heap.dead h l := Sub.dead hSub
+  unfold Heap.dead at hDead
+  unfold Heap.isBoxEnd
+  rw [hDead]
+  simp
 
 end Heap
 

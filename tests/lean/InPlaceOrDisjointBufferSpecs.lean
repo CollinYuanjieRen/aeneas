@@ -27,10 +27,6 @@ theorem InPlaceOrDisjointBuffer.new_disjoint.spec {T : Type} (src dst : Slice T)
           ok (s, d))⌝ ∗ b.src ↦* src.val ∗ b.dst ↦* dst.val ⦄ := by
   unfold InPlaceOrDisjointBuffer.new_disjoint
   step*
-  subst_vars
-  have : ((RawPtr.retype p : ConstRawPtr T).retype : MutRawPtr T) = p := rfl
-  apply (WP.ispec_ok _).2
-  iframe
 
 @[step]
 theorem InPlaceOrDisjointBuffer.impl.len.spec {T : Type} (self : InPlaceOrDisjointBuffer T) :
