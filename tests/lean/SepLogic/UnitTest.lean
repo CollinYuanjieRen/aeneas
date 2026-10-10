@@ -288,7 +288,7 @@ example : ¬ ⦃ emp ⦄ (do
     RawPtr.read p) ⦃ _ => ⌜True⌝ ⦄ := by
   intro hTriple
   have hSpec := (ispec_iff.mp hTriple) emp ∅ ((entails_of_eq (sep_emp_r_eq emp).symm) ∅ trivial)
-  simp only [into_raw, from_raw, RawPtr.read, RawPtr.materialize, Result.guardedModify,
+  simp only [into_raw, from_raw, RawPtr.take, RawPtr.read, RawPtr.materialize, Result.guardedModify,
     Std.bind_tc_vis, Std.bind_tc_ok] at hSpec
   obtain ⟨_, hSpec⟩ := hSpec.vis_view
   obtain ⟨hContains, hSpec⟩ := hSpec.vis_view
@@ -305,7 +305,7 @@ example : ¬ ⦃ emp ⦄ (do
     from_raw p) ⦃ _ => ⌜True⌝ ⦄ := by
   intro hTriple
   have hSpec := (ispec_iff.mp hTriple) emp ∅ ((entails_of_eq (sep_emp_r_eq emp).symm) ∅ trivial)
-  simp only [into_raw, from_raw, RawPtr.materialize, Result.guardedModify,
+  simp only [into_raw, from_raw, RawPtr.take, RawPtr.materialize, Result.guardedModify,
     Std.bind_tc_vis, Std.bind_tc_ok] at hSpec
   obtain ⟨_, hSpec⟩ := hSpec.vis_view
   obtain ⟨hContains, hSpec⟩ := hSpec.vis_view
@@ -315,14 +315,14 @@ example : ¬ ⦃ emp ⦄ (do
     ((Heap.contains_freshHeap_of_mem (Heap.mem_free hContains)).mp hContains')
 
 /-- A pointer into an empty slice does not alias the next allocation. -/
-example : ¬ ⦃ emp ⦄ (do
-    let p ← Aeneas.Std.Slice.as_ptr (Aeneas.Std.Slice.new Nat)
-    let _ ← into_raw (5 : Nat)
-    RawPtr.read p) ⦃ _ => ⌜True⌝ ⦄ := by
+example : ¬ ⦃ emp ⦄ (Aeneas.Std.bind (Aeneas.Std.Slice.as_ptr (Aeneas.Std.Slice.new Nat))
+    fun (p, _) => do
+      let _ ← into_raw (5 : Nat)
+      RawPtr.read p) ⦃ _ => ⌜True⌝ ⦄ := by
   intro hTriple
   have hSpec := (ispec_iff.mp hTriple) emp ∅ ((entails_of_eq (sep_emp_r_eq emp).symm) ∅ trivial)
   simp only [Aeneas.Std.Slice.as_ptr, into_raw, RawPtr.read, RawPtr.materialize,
-    Result.guardedModify, Std.bind_tc_vis, Std.bind_tc_ok] at hSpec
+    Result.guardedModify, Std.bind_tc_eq, Std.bind_vis, Std.bind_ok] at hSpec
   obtain ⟨_, hSpec⟩ := hSpec.vis_view
   obtain ⟨_, hSpec⟩ := hSpec.vis_view
   obtain ⟨hReadable, -⟩ := hSpec.vis_view
@@ -462,24 +462,30 @@ example (q : MutRawPtr Nat) (x y : Nat) : q ↦ x ∗ q ↦ y ⊢ ⌜False⌝ :=
 example (q : MutRawPtr Nat) (x y : Nat) : q ↦ x ∗ (q.shift 1) ↦ y ⊢ q ↦* [x, y] :=
   entails_of_eq (RawPtr.pointsToRange_append q [x] [y]).symm
 
-def slicePtrWrite (s : Aeneas.Std.Slice Nat) : Result (Nat × Aeneas.Std.Slice Nat) := do
-  let (p, s) ← s.as_mut_ptr
-  let q ← p.add 1#usize
-  write q 42
-  let value ← read q
-  pure (value, s)
+/-- `as_mut_ptr` returns a `Result` in `Type 1` (its back computation), hence the explicit
+universe-heterogeneous `Std.bind` (the extracted code gets it from the Aeneas `do` elaborator). -/
+def slicePtrWrite (s : Aeneas.Std.Slice Nat) : Result (Nat × Aeneas.Std.Slice Nat) :=
+  Aeneas.Std.bind s.as_mut_ptr fun (p, back) => do
+    let q ← p.add 1#usize
+    write q 42
+    let value ← read q
+    let s ← back
+    pure (value, s)
 
-/-- `as_mut_ptr` copies: the write is seen through the pointer, not in the returned slice. -/
+/-- The write through the pointer is seen in the slice given back when the borrow ends. -/
 theorem slicePtrWrite.spec (s : Aeneas.Std.Slice Nat) (h : 1 < s.length) :
-    ⦃ emp ⦄ slicePtrWrite s ⦃ (value, s') => ⌜value = 42 ∧ s' = s⌝⦄ := by
+    ⦃ emp ⦄ slicePtrWrite s ⦃ (value, s') => ⌜value = 42 ∧ s'.val = s.val.set 1 42⌝⦄ := by
   unfold slicePtrWrite
   step as ⟨r, hr⟩
-  obtain ⟨p, s'⟩ := r
-  step as ⟨q, hq⟩
-  simp only [hq, show (1#usize).val = 1 by simp]
+  obtain ⟨p, back⟩ := r
+  simp only at hr
+  subst hr
+  step* 1
+  subst_vars
   step with MutRawPtr.write.spec_range p s.val 1 42 (by simpa using h)
   step with RawPtr.read.spec_range p (s.val.set 1 42) 1 (by simpa using h)
   step*
+  exact ⟨by simp [value_post], s_post⟩
 
 /-! `add` stays within the allocation, up to one past its end. -/
 

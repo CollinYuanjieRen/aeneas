@@ -115,6 +115,15 @@ def free {α : Type} (l : Loc) (h : Heap)
     (_ : contains h α l) : Heap :=
   h.insert l none
 
+/-- The slot at `l` is dead: freed, or an end marker. -/
+def dead (h : Heap) (l : Loc) : Prop :=
+  h.impl.lookup l = some none
+
+/-- Brings the dead slot at `l` back to life, holding `value`. -/
+def revive {α : Type} (l : Loc) (value : α) (h : Heap)
+    (_ : dead h l) : Heap :=
+  h.insert l (some ⟨α, value⟩)
+
 end Heap
 
 end Aeneas.Std

@@ -25,8 +25,9 @@ namespace Aeneas.Std
 
 Every executable definition below models a Rust function (see its `rust_fun` pattern), with the
 signature Aeneas gives that function: `Box<T>` is `T`, and a `&mut T` argument is returned updated
-next to the result. The exceptions are `RawPtr.materialize`, the allocation primitive behind
-them, and `RawPtr.cast_scalar`, the `as` cast between raw pointers, which always fails. -/
+next to the result. The exceptions are the heap primitives behind them (`RawPtr.materialize`,
+`RawPtr.take`, `RawPtr.revive`, their range versions, `Result.require`) and
+`RawPtr.cast_scalar`, the `as` cast between raw pointers, which always fails. -/
 
 inductive Mutability where
 | Mut | Const
@@ -72,6 +73,11 @@ def pointsToRange (q : RawPtr T M) (values : List T) : IProp :=
 def pointsTo (q : RawPtr T M) (value : T) : IProp :=
   owns (Heap.singleton q.addr value)
 
+/-- `q` owns the `n` dead slots from `q` on (killed by `take`, to be brought back by `revive`). -/
+def pointsToDead (q : RawPtr T M) : Nat → IProp
+  | 0 => emp
+  | n + 1 => owns (Heap.endMarker q.addr) ∗ pointsToDead (q.shift 1) n
+
 end RawPtr
 
 instance instPointsToRawPtr {T : Type} {M : Mutability} :
@@ -79,6 +85,18 @@ instance instPointsToRawPtr {T : Type} {M : Mutability} :
 
 instance instPointsToRangeRawPtr {T : Type} {M : Mutability} :
     PointsToRange (RawPtr T M) T := ⟨RawPtr.pointsToRange⟩
+
+end Aeneas.Std
+
+namespace Aeneas
+
+scoped notation:50 q:50 " ↦† " n:50 => Std.RawPtr.pointsToDead q n
+
+end Aeneas
+
+namespace Aeneas.Std
+
+open Aeneas
 
 /-- Not a Rust function: stores `values` in fresh slots. -/
 def RawPtr.materialize (values : List T) : Result (RawPtr T M) :=
@@ -125,17 +143,50 @@ attribute [rust_fun "core::ptr::write"] MutRawPtr.write
 def alloc.boxed.Box.into_raw (b : T) : Result (MutRawPtr T) :=
   RawPtr.materialize [b]
 
+/-- Not a Rust function: moves the value out and kills its slot. -/
+def RawPtr.take (q : RawPtr T M) : Result T :=
+  Result.guardedModify (fun h => Heap.contains h T q.addr) fun h hContains =>
+    (Heap.read q.addr h hContains, Heap.free q.addr h hContains)
+
+/-- Not a Rust function: brings the dead slot of `q` back to life, holding `value`. -/
+def RawPtr.revive (q : RawPtr T M) (value : T) : Result Unit :=
+  Result.guardedModify (fun h => Heap.dead h q.addr) fun h hDead =>
+    ((), Heap.revive q.addr value h hDead)
+
+/-- Not a Rust function: `take` on the `n` slots from `q` on. -/
+def RawPtr.takeRange (q : RawPtr T M) : Nat → Result (List T)
+  | 0 => .ok []
+  | n + 1 => do
+    let value ← q.take
+    let values ← (q.shift 1).takeRange n
+    .ok (value :: values)
+
+/-- Not a Rust function: `revive` on the `values.length` slots from `q` on. -/
+def RawPtr.reviveRange (q : RawPtr T M) : List T → Result Unit
+  | [] => .ok ()
+  | value :: values => do
+    q.revive value
+    (q.shift 1).reviveRange values
+
+/-- Not a Rust function: fails unless `p` holds (`p` need not be decidable). -/
+def Result.require (p : Prop) : Result Unit :=
+  Result.guardedModify (fun _ => p) fun h _ => ((), h)
+
 /-- Moves the value out and frees its slot. -/
 @[rust_fun "alloc::boxed::{Box<@T>}::from_raw"]
 def alloc.boxed.Box.from_raw (p : MutRawPtr T) : Result T :=
-  Result.guardedModify (fun h => Heap.contains h T p.addr) fun h hContains =>
-    (Heap.read p.addr h hContains, Heap.free p.addr h hContains)
+  p.take
 
-/-- The pointer points to a fresh copy of `r`, and `r` is returned unchanged. -/
-@[rust_fun "core::ptr::from_mut"]
-def core.ptr.from_mut (r : T) : Result (MutRawPtr T × T) := do
-  let p ← RawPtr.materialize [r]
-  pure (p, r)
+/-- Not a Rust function: end of the borrow given to `from_mut`; moves the value, with the writes
+made through the pointer, out of the slot and kills it. -/
+def core.ptr.end_from_mut (p : MutRawPtr T) : Result T :=
+  p.take
+
+/-- The pointer points to a fresh slot holding `r`; the back computation runs when the borrow
+ends (`statefulLifetimes`). -/
+@[rust_fun "core::ptr::from_mut" (statefulLifetimes := [0])]
+def core.ptr.from_mut (r : T) : Result (MutRawPtr T × Result T) :=
+  Aeneas.Std.bind (RawPtr.materialize [r]) fun p => .ok (p, core.ptr.end_from_mut p)
 
 inductive ScalarKind where
 | Signed (ty : IScalarTy)
@@ -252,6 +303,16 @@ theorem pointsToRange_cons (q : RawPtr T M) (value : T) (rest : List T) :
     (q ↦* ([] : List T)) = emp :=
   entails_antisymm (fun _ _ => trivial) (fun h _ => Heap.Sub.of_empty h)
 
+@[simp] theorem pointsToDead_zero (q : RawPtr T M) : (q ↦† 0) = emp := rfl
+
+theorem pointsToDead_one (q : RawPtr T M) : (q ↦† 1) = owns (Heap.endMarker q.addr) :=
+  sep_emp_r_eq _
+
+theorem pointsToDead_succ (q : RawPtr T M) (n : Nat) :
+    (q ↦† (n + 1)) = iprop(q ↦† 1 ∗ (q.shift 1) ↦† n) := by
+  rw [pointsToDead_one]
+  rfl
+
 end RawPtr
 
 theorem RawPtr.pointsTo_exclusive (q : RawPtr T M) (value₁ value₂ : T) :
@@ -355,10 +416,12 @@ theorem MutRawPtr.write.spec (q : MutRawPtr T) (oldValue newValue : T) :
       Heap.update_singleton]
     exact Heap.Sub.union_left hCompatibleNew
 
+namespace RawPtr
+
 @[step]
-theorem alloc.boxed.Box.from_raw.spec {value : T} (q : MutRawPtr T) :
-    ⦃ q ↦ value ⦄ alloc.boxed.Box.from_raw q
-      ⦃ result => ⌜result = value⌝⦄ := by
+theorem take.spec (q : RawPtr T M) (value : T) :
+    ⦃ q ↦ value ⦄ q.take ⦃ result => ⌜result = value⌝ ∗ q ↦† 1⦄ := by
+  rw [pointsToDead_one]
   apply ispec_guardedModify
   intro h hPointsTo frame hCompatible
   have hContains : Heap.contains h T q.addr := RawPtr.contains_of_pointsTo hPointsTo
@@ -369,7 +432,69 @@ theorem alloc.boxed.Box.from_raw.spec {value : T} (q : MutRawPtr T) :
   · simpa only [show Heap.contains_union_left hContains =
         Heap.contains_union_left (h₂ := frame) hContains from rfl] using
       Heap.free_union_left q.addr hCompatible hContains
-  · exact Heap.read_of_sub hPointsToFrame _
+  · exact (sep_pure_l _ _ _).mpr
+      ⟨Heap.read_of_sub hPointsToFrame _, Heap.Sub.free hPointsTo hContains⟩
+
+@[step]
+theorem revive.spec (q : RawPtr T M) (value : T) :
+    ⦃ q ↦† 1 ⦄ q.revive value ⦃ q ↦ value⦄ := by
+  rw [pointsToDead_one]
+  apply ispec_guardedModify
+  intro h hDead frame hCompatible
+  have hDeadH : Heap.dead h q.addr := Heap.Sub.dead hDead
+  exact ⟨Heap.dead_union_left hDeadH, Heap.revive q.addr value h hDeadH,
+    Heap.disjoint_revive_left hCompatible hDeadH, Heap.revive_union_left _ _ hDeadH,
+    Heap.Sub.revive value hDead hDeadH⟩
+
+@[step]
+theorem takeRange.spec (q : RawPtr T M) (values : List T) :
+    ⦃ q ↦* values ⦄ q.takeRange values.length
+      ⦃ result => ⌜result = values⌝ ∗ q ↦† values.length⦄ := by
+  induction values generalizing q with
+  | nil => simp [takeRange]
+  | cons value values ih =>
+    rw [pointsToRange_cons, List.length_cons, pointsToDead_succ, takeRange]
+    apply WP.ispec_bind (take.spec q value)
+    · iframe
+    · intro v
+      apply WP.ispec_bind (ih (q.shift 1))
+      · iframe
+      · intro vs
+        apply (WP.ispec_ok _).2
+        iframe
+
+@[step]
+theorem reviveRange.spec (q : RawPtr T M) (values : List T) :
+    ⦃ q ↦† values.length ⦄ q.reviveRange values ⦃ q ↦* values⦄ := by
+  induction values generalizing q with
+  | nil => simp [reviveRange]
+  | cons value values ih =>
+    rw [pointsToRange_cons, List.length_cons, pointsToDead_succ, reviveRange]
+    apply WP.ispec_bind (revive.spec q value)
+    · iframe
+    · intro _
+      apply WP.ispec_mono (ih (q.shift 1)) <;> iframe
+
+/-- `reviveRange.spec` with the number of dead slots given separately. -/
+theorem reviveRange.spec_len (q : RawPtr T M) (values : List T) (n : Nat)
+    (h : values.length = n) :
+    ⦃ q ↦† n ⦄ q.reviveRange values ⦃ q ↦* values⦄ := by
+  subst h
+  exact reviveRange.spec q values
+
+end RawPtr
+
+@[step]
+theorem Result.require.spec {p : Prop} (hp : p) : ⦃ emp ⦄ Result.require p ⦃ emp⦄ := by
+  apply ispec_guardedModify
+  intro h _ frame hCompatible
+  exact ⟨hp, h, hCompatible, rfl, trivial⟩
+
+@[step]
+theorem alloc.boxed.Box.from_raw.spec {value : T} (q : MutRawPtr T) :
+    ⦃ q ↦ value ⦄ alloc.boxed.Box.from_raw q
+      ⦃ result => ⌜result = value⌝⦄ :=
+  WP.ispec_mono (RawPtr.take.spec q value) (by iframe) (by iframe)
 
 namespace RawPtr
 
@@ -423,14 +548,25 @@ theorem MutRawPtr.write.spec_range (q : MutRawPtr T) (values : List T)
     RawPtr.take_set, RawPtr.drop_set, List.getElem_set_self]
   apply WP.ispec_mono (MutRawPtr.write.spec (q.shift i) values[i] value) <;> iframe
 
+theorem MutRawPtr.write.spec_head (q : MutRawPtr T) (values : List T) (value : T)
+    (h : 0 < values.length) :
+    ⦃ q ↦* values ⦄ q.write value ⦃ q ↦* values.set 0 value⦄ := by
+  simpa using MutRawPtr.write.spec_range q values 0 value h
+
 @[step]
 theorem core.ptr.from_mut.spec (value : T) :
-    ⦃ emp ⦄ core.ptr.from_mut value ⦃ (q, back) => ⌜back = value⌝ ∗ q ↦ value⦄ := by
+    ⦃ emp ⦄ core.ptr.from_mut value
+      ⦃ (q, back) => ⌜back = core.ptr.end_from_mut q⌝ ∗ q ↦ value⦄ := by
   unfold core.ptr.from_mut
   apply WP.ispec_bind (alloc.boxed.Box.into_raw.spec value)
   · iframe
   · intro q
     apply (ispec_ok _).2
     iframe
+
+@[step]
+theorem core.ptr.end_from_mut.spec (q : MutRawPtr T) (value : T) :
+    ⦃ q ↦ value ⦄ core.ptr.end_from_mut q ⦃ result => ⌜result = value⌝⦄ :=
+  WP.ispec_mono (RawPtr.take.spec q value) (by iframe) (by iframe)
 
 end Aeneas.Std

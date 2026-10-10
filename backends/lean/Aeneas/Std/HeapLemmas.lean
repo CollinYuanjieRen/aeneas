@@ -534,6 +534,48 @@ theorem read_of_sub {α : Type} {l : Loc} {value : α} {h : Heap}
       Subsingleton.elim _ _,
     read_union_left hContainsSingleton, read_singleton]
 
+theorem dead_union_left {h₁ h₂ : Heap} {l : Loc} (hDead : Heap.dead h₁ l) :
+    Heap.dead (h₁ ∪ h₂) l :=
+  (Finmap.lookup_union_left (Finmap.mem_of_lookup_eq_some hDead)).trans hDead
+
+theorem Sub.dead {h : Heap} {l : Loc} (hSub : Heap.Sub (endMarker l) h) : Heap.dead h l := by
+  obtain ⟨rest, -, rfl⟩ := hSub
+  exact dead_union_left (by simp [Heap.dead, endMarker])
+
+theorem disjoint_revive_left {α : Type} {l : Loc} {value : α} {h₁ h₂ : Heap}
+    (hCompatible : PartialCommMonoid.Compatible h₁ h₂) (hDead : Heap.dead h₁ l) :
+    PartialCommMonoid.Compatible (Heap.revive l value h₁ hDead) h₂ :=
+  disjoint_insert_left hCompatible (Finmap.mem_of_lookup_eq_some hDead)
+
+theorem revive_union_left {α : Type} {h₁ h₂ : Heap} (l : Loc) (value : α)
+    (hDead : Heap.dead h₁ l) :
+    Heap.revive l value (h₁ ∪ h₂) (dead_union_left hDead) = Heap.revive l value h₁ hDead ∪ h₂ :=
+  Heap.insert_union
+
+/-- Freeing a slot one owns leaves one owning it dead. -/
+theorem Sub.free {α : Type} {l : Loc} {value : α} {h : Heap}
+    (hSub : Heap.Sub (singleton l value) h) (hContains : Heap.contains h α l) :
+    Heap.Sub (endMarker l) (Heap.free l h hContains) := by
+  obtain ⟨rest, hCompatible, rfl⟩ := hSub
+  refine ⟨rest, fun a hMem => hCompatible a (mem_singleton.mpr (mem_endMarker.mp hMem)), ?_⟩
+  show (singleton l value ∪ rest).insert l none = _
+  rw [Heap.insert_union]
+  congr 1
+  apply Heap.ext_impl
+  simp [Heap.insert, singleton, endMarker]
+
+/-- Reviving a dead slot one owns leaves one owning it live. -/
+theorem Sub.revive {α : Type} {l : Loc} {h : Heap} (value : α)
+    (hSub : Heap.Sub (endMarker l) h) (hDead : Heap.dead h l) :
+    Heap.Sub (singleton l value) (Heap.revive l value h hDead) := by
+  obtain ⟨rest, hCompatible, rfl⟩ := hSub
+  refine ⟨rest, fun a hMem => hCompatible a (mem_endMarker.mpr (mem_singleton.mp hMem)), ?_⟩
+  show (endMarker l ∪ rest).insert l (some ⟨α, value⟩) = _
+  rw [Heap.insert_union]
+  congr 1
+  apply Heap.ext_impl
+  simp [Heap.insert, singleton, endMarker]
+
 end Heap
 
 end Aeneas.Std
