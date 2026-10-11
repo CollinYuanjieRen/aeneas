@@ -265,8 +265,13 @@ syntax (name := iFrame) "iframe" (" by " tacticSeq)? : tactic
 elab_rules : tactic
   | `(tactic| iframe $[by $tac?]?) => Tactic.focus do withMainContext do
   let discharger : Option Syntax.Tactic := tac?.map fun tac => ⟨tac.raw⟩
-  let localAsms :=
-    (← (← getLCtx).getAssumptions).map LocalDecl.fvarId |>.toArray
+  /- Skip the equations which would make `simp` loop, such as `y = (m ++ [y])[k]`. We only catch
+     the direct self-references: `simp` may still loop with several equations (`a = f b` and
+     `b = g a`). -/
+  let localAsms ← (← (← getLCtx).getAssumptions).filterM fun decl => do
+    let some (_, lhs, rhs) := (← instantiateMVars decl.type).consumeMData.eq? | return true
+    return !lhs.occurs rhs
+  let localAsms := localAsms.map LocalDecl.fvarId |>.toArray
   let _ ← Aeneas.Simp.simpAt true
     { dsimp := false, failIfUnchanged := false, maxDischargeDepth := 1 }
     { hypsToUse := localAsms }
