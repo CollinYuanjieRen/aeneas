@@ -130,6 +130,14 @@ private partial def peelRequiredExists (required : Expr) :
     ← mkAppM ``entails_trans #[peeledEntailsBody, bodyEntailsRequired],
     witnesses.push witness.mvarId!)
 
+/-- `e` with its existentials floated out of the `∗` (`sep_exists_l_eq`, `sep_exists_r_eq`), and
+a proof that it entails `e`. -/
+private def floatExists (e : Expr) : MetaM (Expr × Expr) := do
+  let thms ← [``sep_exists_l_eq, ``sep_exists_r_eq].foldlM (·.addConst ·) ({} : SimpTheorems)
+  let ctx ← Simp.mkContext {} (simpTheorems := #[thms])
+  let (r, _) ← Lean.Meta.simp e ctx
+  return (r.expr, ← mkAppM ``entails_of_eq #[← mkEqSymm (← r.getProof)])
+
 mutual
 
 partial def proveWand (discharger : Option Syntax.Tactic)
@@ -150,23 +158,54 @@ partial def solveHimpl (discharger : Option Syntax.Tactic) (goal : MVarId) :
     let destArgs := destination.consumeMData.getAppArgs
     let original ← reducePostApplication destArgs[0]!
     let sourceAtoms ← flatten source
-    let solveWith (required weakening : Expr) (witnesses : Array MVarId) :
+    /- Match the atoms of `required` with those of the source; with `provePures`, the pure
+       atoms of `required` which are not in the source are proved instead (after the matching
+       fixed the witnesses). -/
+    let solveWith (required weakening : Expr) (witnesses : Array MVarId) (provePures := false) :
         TacticM Bool := do
-      let some (pairs, frameAtoms) ← matchAll sourceAtoms (← flatten required)
+      let atoms ← flatten required
+      let (pures, spatial) := if provePures then
+          atoms.partition (·.consumeMData.isAppOfArity ``ipure 1)
+        else (#[], atoms)
+      if provePures then solveWitnessEqs required witnesses
+      let some (pairs, rest) ← matchAll sourceAtoms spatial
         | return false
+      let (purePairs, toProve, frameAtoms) ← matchAtoms rest pures
+      let pairs := pairs ++ purePairs
       for witness in witnesses do
         unless ← witness.isAssigned do return false
+      -- `matched ⊢ original`, where `matched` is the matched part of the source
+      let (matched, toOriginal) ← if toProve.isEmpty then
+          pure (required, weakening)
+        else do
+          let some pureProofs ← observing? (toProve.mapM fun expected => do
+              provePure discharger (← instantiateMVars expected.consumeMData.appArg!))
+            | return false
+          let matched := mkStar (spatial ++ purePairs.map (·.1))
+          let mut current := matched
+          let mut proof ← mkAppM ``entails_refl #[matched]
+          for expected in toProve, pureProof in pureProofs do
+            proof ← mkAppM ``entails_trans #[proof, ← mkAppM ``pure_sep_intro #[current, pureProof]]
+            current := mkApp2 (mkConst ``sep) expected current
+          let toRequired ← mkAppM ``entails_trans
+            #[proof, ← mkAppM ``entails_of_eq #[← proveEqAC current required]]
+          pure (matched, ← mkAppM ``entails_trans #[toRequired, weakening])
       let frame := mkStar frameAtoms
       frameMVar.assign frame
-      let cancelled := mkApp2 (mkConst ``sep) (← instantiateMVars required) frame
+      let cancelled := mkApp2 (mkConst ``sep) (← instantiateMVars matched) frame
       let reorder ← mkAppM ``entails_of_eq #[← proveEqAC source cancelled pairs]
       let weaken ← mkAppM ``sep_mono
-        #[← instantiateMVars weakening, ← mkAppM ``entails_refl #[frame]]
+        #[← instantiateMVars toOriginal, ← mkAppM ``entails_refl #[frame]]
       goal.assign (← mkAppM ``entails_trans #[reorder, weaken])
       return true
-    let solvePeeled : TacticM Bool := do
-      let (peeled, weakening, witnesses) ← peelRequiredExists original
-      solveWith peeled weakening witnesses
+    let solvePeeled (provePures := false) : TacticM Bool := do
+      if !provePures then
+        let (peeled, weakening, witnesses) ← peelRequiredExists original
+        return ← solveWith peeled weakening witnesses
+      let (floated, floatedEntails) ← floatExists original
+      let (peeled, weakening, witnesses) ← peelRequiredExists floated
+      solveWith peeled (← mkAppM ``entails_trans #[weakening, floatedEntails]) witnesses
+        (provePures := true)
     let openSourceExists : TacticM Bool := do
       let (sourceFn, sourceArgs) := source.consumeMData.withApp fun fn args => (fn, args)
       unless sourceFn.isConstOf ``iexists && sourceArgs.size = 2 do return false
@@ -181,11 +220,19 @@ partial def solveHimpl (discharger : Option Syntax.Tactic) (goal : MVarId) :
         return some (← mkLambdaFVars #[x] (← instantiateMVars innerGoal),
           ← mkLambdaFVars #[x] (← instantiateMVars innerFrame))
         | return false
+      if let .lam _ _ frame _ := frameFn then
+        unless frame.hasLooseBVars do
+          -- The frame does not depend on the witness
+          frameMVar.assign frame
+          goal.assign (mkAppN (mkConst ``entails_exists_l [u])
+            #[ι, mkApp2 (mkConst ``sep) original frame, J, body])
+          return true
       frameMVar.assign (mkApp2 (mkConst ``iexists [u]) ι frameFn)
       goal.assign (mkAppN (mkConst ``entails_exists_frame [u]) #[ι, original, J, frameFn, body])
       return true
     unless ← commitWhen (solveWith original (← mkAppM ``entails_refl #[original]) #[]) <||>
-        commitWhen solvePeeled <||> commitWhen openSourceExists do
+        commitWhen solvePeeled <||> commitWhen openSourceExists <||>
+        commitWhen (solvePeeled (provePures := true)) do
       throwError "required spatial assertions are not present in the precondition\
         \nsource: {source}\ndestination: {destination}"
   else
