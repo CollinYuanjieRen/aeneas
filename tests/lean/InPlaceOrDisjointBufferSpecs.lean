@@ -64,9 +64,6 @@ theorem zero_first_in_place.spec (buf : Slice U8) (h : 0 < buf.length) :
   unfold zero_first_in_place
   step*
   iterate 2 (try (case hNotNull => apply RawPtr.notNull_of_pos; simp_all); try step*)
-  rw [b_post2]
-  step with Slice.end_as_mut_ptr.spec buf b.dst (d.set 0#usize 0#u8).val (by simp [d_post])
-  step*
   exact ⟨by simp [i_post, b1_post, b_post], Slice.ext _ _ (by simp [buf1_post, d_post])⟩
 
 theorem copy_first.spec (src dst : Slice U8) (h : src.length = dst.length)
@@ -75,14 +72,9 @@ theorem copy_first.spec (src dst : Slice U8) (h : src.length = dst.length)
   unfold copy_first
   step*
   iterate 2 (try (case hNotNull => apply RawPtr.notNull_of_pos; simp_all); try step*)
-  rw [src_back_post]
-  step with RawPtr.reviveRange.spec_len b.src src.val dst.length (by simp [h])
-  step*
   case hNotNull => apply RawPtr.notNull_of_pos; simp [b_post]; scalar_tac
   step*
-  rw [b_post1]
-  step*
-  exact ⟨Slice.ext _ _ s_post, Slice.ext _ _ (by simp [d_post, s1_post])⟩
+  exact ⟨Slice.ext _ _ r_post, Slice.ext _ _ (by simp [d_post, s1_post])⟩
 
 theorem increment_first_in_place.spec (buf : Slice U8) (h : 0 < buf.length) :
     ⦃ emp ⦄ increment_first_in_place buf
@@ -90,14 +82,8 @@ theorem increment_first_in_place.spec (buf : Slice U8) (h : 0 < buf.length) :
   unfold increment_first_in_place
   step*
   iterate 2 (try (case hNotNull => apply RawPtr.notNull_of_pos; simp_all); try step*)
-  rw [src_back_post, b_post1]
-  step with RawPtr.reviveRange.spec_len (RawPtr.retype b.dst) buf.val buf.val.length rfl
-  step*
-  iterate 2 (try (case hNotNull => apply RawPtr.notNull_of_pos; simp_all); try step*)
-  rw [b_post2]
-  step with Slice.end_as_mut_ptr.spec buf b.dst s2.val (by simp [s2_post, s1_post])
   apply Slice.ext
-  rw [r_post, s2_post, i_post, x_post, List.getElem_of_eq s_post]
+  rw [r_post]
   simp [s1_post]
 
 end in_place_or_disjoint_buffer
