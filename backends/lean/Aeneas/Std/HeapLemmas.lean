@@ -210,22 +210,34 @@ theorem compatible_cells_append {α : Type} (l : Loc) (xs ys : List (Option α))
     (congrArg Prod.snd hL).symm.trans (congrArg Prod.snd hR)
   omega
 
-theorem not_mem_freshBase {h : Heap} {address : Loc}
-    (hBase : address.1 = freshBase h) : address ∉ h := by
+/-- A fresh allocation is aligned (see `freshBase`). -/
+theorem dvd_freshBase (h : Heap) (align : Nat) : max align 1 ∣ freshBase h align :=
+  Dvd.intro _ rfl
+
+/-- The null allocation `0` is never allocated. -/
+theorem freshBase_ne_zero (h : Heap) (align : Nat) : freshBase h align ≠ 0 := by
+  unfold freshBase
+  exact Nat.mul_ne_zero (by omega) (by omega)
+
+theorem not_mem_freshBase {h : Heap} {align : Nat} {address : Loc}
+    (hBase : address.1 = freshBase h align) : address ∉ h := by
   intro hMem
   have hMemKeys : address ∈ h.keys := Finmap.mem_keys.mpr hMem
-  have hImage : freshBase h ∈ h.keys.image Prod.fst :=
+  have hImage : freshBase h align ∈ h.keys.image Prod.fst :=
     Finset.mem_image.mpr ⟨_, hMemKeys, hBase⟩
-  have hLe : freshBase h ≤ (h.keys.image Prod.fst).sup id :=
-    Finset.le_sup (f := fun a : AllocId => a) hImage
-  have hSucc : (h.keys.image Prod.fst).sup id + 1 ≤
-      (h.keys.image Prod.fst).sup id := hLe
-  exact Nat.not_succ_le_self _ hSucc
+  have hLe : freshBase h align ≤ (h.keys.image Prod.fst).sup id :=
+    Finset.le_sup (f := id) hImage
+  have hGe : 2 * ((h.keys.image Prod.fst).sup id + 1) + 1 ≤ freshBase h align :=
+    Nat.le_mul_of_pos_left _ (by omega)
+  have hContra := Nat.le_trans hGe hLe
+  generalize (h.keys.image Prod.fst).sup id = s at hContra
+  omega
 
-theorem compatible_freshLoc {α : Type} (h : Heap) (contents : List (Option α)) (last : Slot) :
-    PartialCommMonoid.Compatible (allocation (freshLoc h) contents last) h := by
+theorem compatible_freshLoc {α : Type} (h : Heap) (align : Nat) (contents : List (Option α))
+    (last : Slot) :
+    PartialCommMonoid.Compatible (allocation (freshLoc h align) contents last) h := by
   intro address hFresh hMem
-  apply not_mem_freshBase (h := h) _ hMem
+  apply not_mem_freshBase (h := h) (align := align) _ hMem
   rcases Heap.mem_union.mp hFresh with hRange | hEnd
   · obtain ⟨i, -, rfl⟩ := mem_cells.mp hRange
     rfl
@@ -369,6 +381,12 @@ theorem disjoint_contains_false {α : Type} {h₁ h₂ : Heap} {l : Loc}
   hCompatible l (mem_of_contains hContains₁)
     (mem_of_contains hContains₂)
 
+/-- A cell has a single type. -/
+theorem contains_unique {α β : Type} {h : Heap} {l : Loc}
+    (hα : contains h α l) (hβ : contains h β l) : α = β := by
+  unfold contains at hα hβ
+  split at hα <;> simp_all
+
 theorem contains_union_left {α : Type} {h₁ h₂ : Heap} {l : Loc}
     (hContains : contains h₁ α l) : contains (h₁ ∪ h₂) α l := by
   have hMem : l ∈ h₁ := mem_of_contains hContains
@@ -452,38 +470,38 @@ theorem not_contains_free {α β : Type} {l : Loc} {h : Heap} (hContains : conta
   simp [contains, Heap.free, Heap.insert, Heap.lookup]
 
 /-- Allocation leaves the slots already in the heap untouched. -/
-theorem contains_freshHeap_of_mem {α β : Type} {h : Heap} {contents : List (Option β)}
+theorem contains_freshHeap_of_mem {α β : Type} {h : Heap} {align : Nat} {contents : List (Option β)}
     {last : Slot} {l : Loc}
-    (hMem : l ∈ h) : contains (freshHeap h contents last) α l ↔ contains h α l := by
-  have hNotMem : l ∉ allocation (freshLoc h) contents last :=
-    fun hFresh => compatible_freshLoc h contents last l hFresh hMem
+    (hMem : l ∈ h) : contains (freshHeap h align contents last) α l ↔ contains h α l := by
+  have hNotMem : l ∉ allocation (freshLoc h align) contents last :=
+    fun hFresh => compatible_freshLoc h align contents last l hFresh hMem
   unfold contains
-  rw [show (freshHeap h contents last).lookup l = h.lookup l from
+  rw [show (freshHeap h align contents last).lookup l = h.lookup l from
     Finmap.lookup_union_right hNotMem]
 
 /-- The end marker of an allocation is in the heap, so even an empty allocation reserves its id. -/
-theorem mem_freshHeap_end {α : Type} (h : Heap) (contents : List (Option α)) (last : Slot) :
-    (freshLoc h).add contents.length ∈ freshHeap h contents last :=
+theorem mem_freshHeap_end {α : Type} (h : Heap) (align : Nat) (contents : List (Option α)) (last : Slot) :
+    (freshLoc h align).add contents.length ∈ freshHeap h align contents last :=
   Heap.mem_union.mpr (Or.inl (Heap.mem_union.mpr (Or.inr (mem_slot.mpr rfl))))
 
 /-- The end marker of an allocation is dead. -/
-theorem not_contains_freshHeap_end {α β : Type} (h : Heap) (contents : List (Option β))
+theorem not_contains_freshHeap_end {α β : Type} (h : Heap) (align : Nat) (contents : List (Option β))
     (last : Slot) (hLast : ∀ γ c, last ≠ .live γ c) :
-    ¬ contains (freshHeap h contents last) α ((freshLoc h).add contents.length) := by
+    ¬ contains (freshHeap h align contents last) α ((freshLoc h align).add contents.length) := by
   have hNotRange :
-      (freshLoc h).add contents.length ∉ (cells (freshLoc h) contents).impl := by
+      (freshLoc h align).add contents.length ∉ (cells (freshLoc h align) contents).impl := by
     intro hRange
     obtain ⟨i, hi, hEq⟩ := mem_cells.mp hRange
     have hOffset := congrArg Prod.snd hEq
     simp only [Loc.add_snd] at hOffset
     omega
-  have hEnd : (freshLoc h).add contents.length ∈
-      (slot ((freshLoc h).add contents.length) last).impl :=
+  have hEnd : (freshLoc h align).add contents.length ∈
+      (slot ((freshLoc h align).add contents.length) last).impl :=
     mem_slot.mpr rfl
-  have hLookup : (freshHeap h contents last).lookup ((freshLoc h).add contents.length) =
+  have hLookup : (freshHeap h align contents last).lookup ((freshLoc h align).add contents.length) =
       some last := by
-    show Finmap.lookup _ (((cells (freshLoc h) contents).impl ∪
-      (slot ((freshLoc h).add contents.length) last).impl) ∪ h.impl) = _
+    show Finmap.lookup _ (((cells (freshLoc h align) contents).impl ∪
+      (slot ((freshLoc h align).add contents.length) last).impl) ∪ h.impl) = _
     rw [Finmap.lookup_union_left (Finmap.mem_union.mpr (Or.inr hEnd)),
       Finmap.lookup_union_right hNotRange]
     simp [slot]

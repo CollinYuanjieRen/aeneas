@@ -6,6 +6,7 @@ public import Aeneas.Std.Heap
 public import Aeneas.Std.HeapLemmas
 public import Aeneas.Std.MaybeUninit
 public import Aeneas.Std.NonNull
+public import Aeneas.Std.ManuallyDrop
 public import Aeneas.Std.Primitives
 public import Aeneas.Std.PrimitivesLemmas
 public import Aeneas.Std.RawPtr

@@ -7,8 +7,9 @@ initialized (`some value`) or not (`none`), or a dead slot. Supports interior po
 pointers, uninitialized memory, provenance by allocation id. Freed slots and the end marker of each
 allocation stay in the map as dead slots, so allocation ids are never reused. The end marker of a
 box allocation is a distinguished dead slot, which is what makes freeing check that it frees a
-whole box. Not supported: byte-level representation/type punning, pointer-integer casts,
-higher-order store, permissions. -/
+whole box. The byte representation of integers, `bool` and arrays of them (byte cells) is
+described by `Pointee` (see `RawPtr.lean`). Not supported: byte layouts of structures and enums,
+the bytes of pointers, pointer-integer casts, higher-order store, permissions. -/
 
 public section
 
@@ -97,14 +98,20 @@ id even when `contents` is empty. -/
 
 /-- The next allocation identifier, past every one in the heap: allocation is deterministic. Since
 freed slots and end markers stay in the heap as dead slots, an identifier is never handed out
-twice. -/
-def freshBase (h : Heap) : AllocId :=
-  (h.keys.image Prod.fst).sup id + 1
+twice.
 
-@[expose] def freshLoc (h : Heap) : Loc := (freshBase h, 0)
+The identifier also tells how the allocation is aligned: it is an odd multiple of `align`
+(`align` is a power of two, the alignment of the type of the values stored in the allocation), so
+that the largest power of two dividing it is the alignment Rust guarantees for the allocation (see
+`RawPtr.Aligned`). -/
+def freshBase (h : Heap) (align : Nat) : AllocId :=
+  max align 1 * (2 * ((h.keys.image Prod.fst).sup id + 1) + 1)
 
-@[expose] def freshHeap {α : Type} (h : Heap) (contents : List (Option α)) (last : Slot) : Heap :=
-  allocation (freshLoc h) contents last ∪ h
+@[expose] def freshLoc (h : Heap) (align : Nat) : Loc := (freshBase h align, 0)
+
+@[expose] def freshHeap {α : Type} (h : Heap) (align : Nat) (contents : List (Option α))
+    (last : Slot) : Heap :=
+  allocation (freshLoc h align) contents last ∪ h
 
 /-- `h'` is `h` extended with cells that `h` does not own. -/
 @[expose] def Sub (h h' : Heap) : Prop :=
