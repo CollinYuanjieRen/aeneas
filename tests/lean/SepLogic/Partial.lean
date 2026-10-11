@@ -61,13 +61,14 @@ section
 
 unseal Result
 
-example (p : MutRawPtr Nat) (Q : IPost Nat) : ¬ dispec emp (read p) Q := by
+example (p : MutRawPtr Nat) (Q : IPost (Option (Aeneas.Std.TypedCell Nat))) :
+    ¬ dispec emp (Aeneas.Std.HeapOp.read (Aeneas.Std.TypedCell Nat) p.addr) Q := by
   intro hTriple
   rw [dispec_iff] at hTriple
   have hSpec := hTriple emp ∅ ((entails_of_eq (sep_emp_r_eq emp).symm) ∅ trivial)
-  simp only [Aeneas.Std.RawPtr.read, Result.guardedModify] at hSpec
-  obtain ⟨hReadable, -⟩ := hSpec.vis_view
-  exact RawPtr.not_contains_empty p hReadable.contains
+  simp only [Aeneas.Std.HeapOp.read, Result.guardedModify] at hSpec
+  obtain ⟨hContains, -⟩ := hSpec.vis_view
+  exact Heap.not_contains_empty _ hContains
 
 end
 

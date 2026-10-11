@@ -49,18 +49,18 @@ theorem aliasing_borrows.fails (p : NonNull Node) (node : Node) :
     ifails (p.ptr ↦ node) (aliasing_borrows p) := by
   unfold aliasing_borrows
   simp only [NonNull.as_ptr_eq]
-  refine ifails_bind (RawPtr.as_mut_unchecked.spec p.ptr node) fun ⟨_, _⟩ => ?_
+  refine ifails_bind (RawPtr.as_mut_unchecked.spec p.ptr node (by simp)) fun ⟨_, _⟩ => ?_
   simp only [Std.uncurry]
-  exact ifails_bind_left (ifails_mono (by iframe) (RawPtr.as_mut_unchecked.fails_dead p.ptr))
+  exact ifails_bind_left (ifails_mono (by iframe) (RawPtr.as_mut_unchecked.fails_dead p.ptr (by decide)))
 
 /-- Two boxes of a zero-sized type may have the same address: comparing them fails, although the
 Lean model of the type has several values. -/
 theorem compare_zero_sized.fails : ifails emp compare_zero_sized := by
   unfold compare_zero_sized
   simp only [core.mem.maybe_uninit.MaybeUninit.uninit, bind_ok]
-  refine ifails_bind (alloc.boxed.Box.into_raw.spec _) fun p => ?_
+  refine ifails_bind (alloc.boxed.Box.into_raw.spec _) fun p => ifails_ipure fun _ => ?_
   rw [← sep_emp_l_eq (p ↦ _ ∗ p.boxed)]
   refine ifails_bind (ispec_frame (alloc.boxed.Box.into_raw.spec _) _) fun q => ?_
-  exact ifails_mono (by iframe) (RawPtr.eq.fails_zero_sized rfl _ _)
+  exact ifails_mono (by iframe) (RawPtr.eq.fails_zero_sized rfl (by decide) _ _)
 
 end nonnull

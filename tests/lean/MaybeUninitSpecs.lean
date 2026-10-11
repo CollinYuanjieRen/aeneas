@@ -24,8 +24,8 @@ theorem read_uninit.fails (Q : IPost U64) : ¬ ispec emp read_uninit Q := by
   simp only [core.mem.maybe_uninit.MaybeUninit.uninit, Std.bind_ok]
   refine ifails_bind (core.mem.maybe_uninit.MaybeUninit.as_ptr.spec _) fun ⟨p, back⟩ => ?_
   simp only [Std.uncurry, MaybeUninit.toOption_uninit]
-  refine ifails_ipure fun _ => ifails_bind_left ?_
-  exact RawPtr.read.fails_uninit p rfl
+  refine ifails_ipure fun _ => ifails_ipure fun _ => ifails_bind_left ?_
+  exact RawPtr.read.fails_uninit p
 
 @[step]
 theorem Buffer.new.spec : ⦃ emp ⦄ Buffer.new ⦃ b => ⌜b.bytes.val = List.replicate 4 .uninit⌝ ⦄ := by
@@ -110,16 +110,16 @@ theorem Buffer.fill_too_much.fails (self : Buffer)
     simp [h]
   refine ifails_bind (Slice.as_mut_ptr.spec s) fun ⟨p, ab⟩ => ?_
   simp only [Std.uncurry]
-  refine ifails_ipure fun hab => ?_
+  refine ifails_ipure fun hab => ifails_ipure fun hAlign => ?_
   subst hab
-  have h0 := MaybeUninit.write_cast.spec_range p s.val 0 111#u8 (by simp [hs])
+  have h0 := MaybeUninit.write_cast.spec_range p s.val 0 111#u8 (by simp [hs]) hAlign
   simp only [RawPtr.shift_zero] at h0
   refine ifails_bind h0 fun _ => ?_
   refine ifails_bind (Slice.end_as_mut_ptr.spec s p _ (by simp)) fun s1 => ?_
   refine ifails_mono (entails_of_eq (sep_emp_r_eq _).symm) (ifails_ipure fun hs1 => ?_)
   refine ifails_bind (Slice.as_ptr.spec _) fun ⟨p2, ab2⟩ => ?_
   simp only [Std.uncurry]
-  refine ifails_ipure fun _ => ifails_bind_left ?_
+  refine ifails_ipure fun _ => ifails_ipure fun _ => ifails_bind_left ?_
   have hs2 : (tb s1).to_slice.val =
       [111#u8].map MaybeUninit.init ++ [.uninit, .uninit, .uninit] := by
     have htb : tb = self.bytes.from_slice := by
@@ -131,9 +131,9 @@ theorem Buffer.fill_too_much.fails (self : Buffer)
     simp only [Std.Array.to_slice, htb, hfs, hs1, hs]
     rfl
   rw [hs2, MaybeUninit.pointsToRange_init]
-  refine ifails_mono ?_ (core.slice.raw.from_raw_parts.fails (p2.cast U8) 2#usize [111#u8] none rfl
-    (by simp))
-  simp only [List.map, RawPtr.pointsToCells_cons]
+  refine ifails_mono ?_ (core.slice.raw.from_raw_parts.fails (p2.cast U8) 2#usize [111#u8]
+    (List.replicate (Pointee.size U8) none) (by simp) Pointee.UninitInvalid.ofCells_uninit (by simp))
+  simp only [List.map, RawPtr.pointsToOpts_cons, RawPtr.pointsToOpt_eq, Pointee.optCells_none]
   iframe
 
 end maybe_uninit
