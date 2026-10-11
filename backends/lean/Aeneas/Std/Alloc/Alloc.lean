@@ -35,34 +35,32 @@ def Global.allocate [Pointee T] (_ : Global) (values : List T) : Result (MutRawP
 -- This signature is different from Rust's signature in two ways:
 -- TODO: it should take a NonNull<T>
 -- TODO: then a NonNull<u8> and a Layout
-def Global.deallocate (_ : Global) (p : MutRawPtr T) (count : Nat) : Result Unit :=
-  Result.guardedModify _ (Heap.dealloc p count .global)
+def Global.deallocate [Pointee T] (_ : Global) (p : MutRawPtr T) (count : Nat) : Result Unit :=
+  Result.guardedModify _ (Heap.dealloc p (count * Pointee.size T) .global)
 
 @[step]
-theorem Global.allocate.spec [Pointee T] (g : Global) (values : List T) :
-    ⦃ emp ⦄ g.allocate values ⦃ q => q ↦* values ∗ q.freeable values.length⦄ :=
+theorem Global.allocate.spec [Pointee T] [Pointee.Lawful T] (g : Global) (values : List T) :
+    ⦃ emp ⦄ g.allocate values ⦃ q => ⌜q.Aligned⌝ ∗ q ↦* values ∗ q.freeable values.length⦄ :=
   RawPtr.alloc.spec values .global
 
 /-- `q.freeable` is required: without it, `q` could be an interior pointer or point to a local
 behind a reference, and freeing it is undefined behaviour. -/
 @[step]
-theorem Global.deallocate.spec [Pointee T] (g : Global) (q : MutRawPtr T) (values : List T) (count : Nat)
+theorem Global.deallocate.spec [Pointee T] [Pointee.Lawful T] (g : Global) (q : MutRawPtr T) (values : List T) (count : Nat)
     (hCount : values.length = count) :
     ⦃ q ↦* values ∗ q.freeable count ⦄ g.deallocate q count ⦃ _ => emp⦄ := by
-  subst hCount
-  have hSpec := Heap.dealloc.spec q (values.map Pointee.toCell) .global
-  rwa [List.length_map] at hSpec
+  exact Heap.dealloc.spec q _ count .global
+    (by rw [Pointee.length_flatMap_toCells, hCount])
 
 /-- `deallocate` leaves the slot at `q` freed. -/
-theorem Global.deallocate.spec_freed [Pointee T] (g : Global) (q : MutRawPtr T) (values : List T)
+theorem Global.deallocate.spec_freed [Pointee T] [Pointee.Lawful T] (g : Global) (q : MutRawPtr T) (values : List T)
     (count : Nat) (hCount : values.length = count) :
     ⦃ q ↦* values ∗ q.freeable count ⦄ g.deallocate q count ⦃ _ => q.freed⦄ := by
-  subst hCount
-  have hSpec := Heap.dealloc.spec_freed q (values.map Pointee.toCell) .global
-  rwa [List.length_map] at hSpec
+  exact Heap.dealloc.spec_freed q _ count .global
+    (by rw [Pointee.length_flatMap_toCells, hCount])
 
 /-- Deallocating a raw-pointer view fails: only the global allocator's memory can be freed. -/
-theorem Global.deallocate.fails_view (g : Global) (q : MutRawPtr T) (count : Nat) :
+theorem Global.deallocate.fails_view [Pointee T] (g : Global) (q : MutRawPtr T) (count : Nat) :
     WP.ifails (q.freeable count .view) (g.deallocate q count) := by
   apply WP.ifails_guardedModify
   intro h hFreeable h' hSub hDealloc
